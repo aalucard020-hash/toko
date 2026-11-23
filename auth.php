@@ -13,6 +13,7 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 function tokokuPdo(): PDO
 {
     static $pdo;
+    static $barcodeSchemaReady = false;
 
     if (!$pdo instanceof PDO) {
         $pdo = new PDO(
@@ -27,7 +28,97 @@ function tokokuPdo(): PDO
         );
     }
 
+    if (!$barcodeSchemaReady) {
+        ensureProductBarcodeSchema($pdo);
+        ensurePaymentSchema($pdo);
+        $barcodeSchemaReady = true;
+    }
+
     return $pdo;
+}
+
+function ensurePaymentSchema(PDO $pdo): void
+{
+    $pdo->exec(
+        "ALTER TABLE tbl_transaksi
+         ADD COLUMN IF NOT EXISTS metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Tunai'"
+    );
+    $pdo->exec(
+        "ALTER TABLE tbl_transaksi
+         ADD COLUMN IF NOT EXISTS status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas'"
+    );
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS tbl_pengaturan (
+            nama VARCHAR(64) NOT NULL,
+            nilai VARCHAR(255) NOT NULL,
+            PRIMARY KEY (nama)
+         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci'
+    );
+}
+
+function ensureProductBarcodeSchema(PDO $pdo): void
+{
+    $lock = (int) $pdo->query("SELECT GET_LOCK('tokoku_product_barcode_schema', 10)")->fetchColumn() === 1;
+    if (!$lock) {
+        throw new RuntimeException('Pembaruan kolom barcode sedang berlangsung. Muat ulang halaman sebentar lagi.');
+    }
+
+    try {
+        $column = $pdo->query("SHOW COLUMNS FROM tbl_produk LIKE 'barcode'")->fetch();
+        if (!$column) {
+            $pdo->exec('ALTER TABLE tbl_produk ADD COLUMN barcode VARCHAR(100) DEFAULT NULL');
+        }
+
+        $uniqueIndex = $pdo->query(
+            "SHOW INDEX FROM tbl_produk WHERE Column_name = 'barcode' AND Non_unique = 0"
+        )->fetch();
+        $update = $pdo->prepare('UPDATE tbl_produk SET barcode = ? WHERE id_produk = ?');
+        if ($uniqueIndex) {
+            $products = $pdo->query(
+                "SELECT id_produk FROM tbl_produk WHERE barcode IS NULL OR TRIM(barcode) = '' ORDER BY id_produk"
+            )->fetchAll();
+            $check = $pdo->prepare('SELECT COUNT(*) FROM tbl_produk WHERE barcode = ?');
+            foreach ($products as $product) {
+                $productId = (int) $product['id_produk'];
+                $base = 'TKP' . str_pad((string) $productId, 10, '0', STR_PAD_LEFT);
+                $barcode = $base;
+                $suffix = 1;
+                do {
+                    $check->execute([$barcode]);
+                    if ((int) $check->fetchColumn() === 0) {
+                        break;
+                    }
+                    $barcode = $base . '-' . $suffix++;
+                } while (true);
+                $update->execute([$barcode, $productId]);
+            }
+        } else {
+            $products = $pdo->query('SELECT id_produk, barcode FROM tbl_produk ORDER BY id_produk')->fetchAll();
+            $seen = [];
+            foreach ($products as $product) {
+                $productId = (int) $product['id_produk'];
+                $barcode = trim((string) ($product['barcode'] ?? ''));
+                $normalized = mb_strtolower($barcode, 'UTF-8');
+                if ($barcode === '' || isset($seen[$normalized])) {
+                    $base = 'TKP' . str_pad((string) $productId, 10, '0', STR_PAD_LEFT);
+                    $barcode = $base;
+                    $suffix = 1;
+                    while (isset($seen[mb_strtolower($barcode, 'UTF-8')])) {
+                        $barcode = $base . '-' . $suffix++;
+                    }
+                    $update->execute([$barcode, $productId]);
+                    $normalized = mb_strtolower($barcode, 'UTF-8');
+                }
+                $seen[$normalized] = true;
+            }
+        }
+
+        if (!$uniqueIndex) {
+            $pdo->exec('ALTER TABLE tbl_produk ADD UNIQUE INDEX uq_produk_barcode (barcode)');
+        }
+    } finally {
+        $pdo->query("SELECT RELEASE_LOCK('tokoku_product_barcode_schema')");
+    }
 }
 
 function ensureAuthSchema(PDO $pdo): void

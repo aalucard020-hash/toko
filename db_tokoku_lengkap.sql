@@ -49,13 +49,29 @@ CREATE TABLE IF NOT EXISTS tbl_produk (
   nama_produk VARCHAR(120) NOT NULL,
   harga DECIMAL(12,2) NOT NULL,
   stok INT NOT NULL DEFAULT 0,
+  foto VARCHAR(255) DEFAULT NULL,
+  barcode VARCHAR(100) DEFAULT NULL,
   PRIMARY KEY (id_produk),
   KEY idx_produk_kategori (id_kategori),
+  UNIQUE KEY uq_produk_barcode (barcode),
   CONSTRAINT fk_produk_kategori
     FOREIGN KEY (id_kategori) REFERENCES tbl_kategori (id_kategori),
   CONSTRAINT chk_produk_harga CHECK (harga >= 0),
   CONSTRAINT chk_produk_stok CHECK (stok >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- Foto produk disimpan sebagai nama berkas pada folder uploads/products.
+ALTER TABLE tbl_produk
+  ADD COLUMN IF NOT EXISTS foto VARCHAR(255) DEFAULT NULL;
+ALTER TABLE tbl_produk
+  ADD COLUMN IF NOT EXISTS barcode VARCHAR(100) DEFAULT NULL;
+ALTER TABLE tbl_produk
+  ADD UNIQUE INDEX IF NOT EXISTS uq_produk_barcode (barcode);
+
+-- Buat kode barcode untuk produk lama yang belum memiliki kode.
+UPDATE tbl_produk
+SET barcode = CONCAT('TKP', LPAD(id_produk, 10, '0'))
+WHERE barcode IS NULL OR TRIM(barcode) = '';
 
 CREATE TABLE IF NOT EXISTS tbl_transaksi (
   id_transaksi INT NOT NULL AUTO_INCREMENT,
@@ -64,6 +80,8 @@ CREATE TABLE IF NOT EXISTS tbl_transaksi (
   subtotal DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   diskon DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   total_belanja DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Tunai',
+  status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas',
   PRIMARY KEY (id_transaksi),
   KEY idx_transaksi_pelanggan_tanggal (id_pelanggan, tanggal),
   KEY idx_transaksi_tanggal (tanggal),
@@ -76,6 +94,10 @@ ALTER TABLE tbl_transaksi
   ADD COLUMN IF NOT EXISTS subtotal DECIMAL(12,2) NOT NULL DEFAULT 0.00;
 ALTER TABLE tbl_transaksi
   ADD COLUMN IF NOT EXISTS diskon DECIMAL(12,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Tunai';
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas';
 UPDATE tbl_transaksi
 SET subtotal = total_belanja
 WHERE subtotal = 0 AND total_belanja > 0;
@@ -112,6 +134,12 @@ CREATE TABLE IF NOT EXISTS tbl_log (
   pengguna VARCHAR(100) NOT NULL,
   PRIMARY KEY (id_log),
   KEY idx_log_tabel_waktu (nama_tabel, waktu)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS tbl_pengaturan (
+  nama VARCHAR(64) NOT NULL,
+  nilai VARCHAR(255) NOT NULL,
+  PRIMARY KEY (nama)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- Data contoh. INSERT IGNORE menjaga skrip aman dijalankan ulang.
