@@ -12,9 +12,16 @@ if (authUser() !== null) {
 $error = null;
 $pdo = null;
 $databaseReady = false;
+$storeName = 'TokoKita';
+$storeLogo = null;
 
 try {
     $pdo = tokokuPdo();
+    $storeName = tokokuSetting($pdo, 'store_name', 'TokoKita');
+    $logoName = tokokuSetting($pdo, 'store_logo');
+    if ($logoName !== '' && basename($logoName) === $logoName && is_file(__DIR__ . '/uploads/store/' . $logoName)) {
+        $storeLogo = 'uploads/store/' . $logoName;
+    }
     ensureAuthSchema($pdo);
     $databaseReady = (int) $pdo->query(
         "SELECT COUNT(*) FROM tbl_pengguna WHERE role = 'admin'"
@@ -96,15 +103,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $databaseReady && $pdo instanceof P
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f7f8fa">
-    <title>Daftar Pembeli — TokoKita</title>
-    <link rel="stylesheet" href="style.css?v=auth-responsive">
+    <title>Daftar Pembeli — <?= htmlspecialchars($storeName, ENT_QUOTES, 'UTF-8') ?></title>
+    <link rel="stylesheet" href="style.css?v=store-logo-size">
 </head>
 <body class="auth-page">
 <main class="auth-shell register-shell">
     <section class="auth-brand-panel">
-        <a class="brand auth-brand" href="login.php" aria-label="TokoKita">
-            <span class="brand-mark">t<span>.</span></span>
-            <span class="brand-copy">tokokita<small>STORE MANAGEMENT</small></span>
+        <a class="brand auth-brand" href="login.php" aria-label="<?= htmlspecialchars($storeName, ENT_QUOTES, 'UTF-8') ?>">
+            <?php if ($storeLogo): ?><img class="brand-logo" src="<?= htmlspecialchars($storeLogo, ENT_QUOTES, 'UTF-8') ?>" alt=""><?php else: ?><span class="brand-mark"><?= htmlspecialchars(mb_strtolower(mb_substr($storeName, 0, 1)), ENT_QUOTES, 'UTF-8') ?><span>.</span></span><?php endif; ?>
+            <span class="brand-copy"><?= htmlspecialchars($storeName, ENT_QUOTES, 'UTF-8') ?><small>STORE MANAGEMENT</small></span>
         </a>
         <div class="auth-illustration" aria-hidden="true">
             <span class="illustration-orbit orbit-one"></span>
@@ -114,15 +121,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $databaseReady && $pdo instanceof P
             <span class="illustration-spark spark-two">✦</span>
         </div>
         <div class="auth-brand-copy">
-            <p class="eyebrow">TOKOKITA · AKUN PEMBELI</p>
+            <p class="eyebrow"><?= htmlspecialchars(mb_strtoupper($storeName), ENT_QUOTES, 'UTF-8') ?> · AKUN PEMBELI</p>
             <h1>Belanja lebih mudah dengan akun Anda.</h1>
             <p>Lihat riwayat pesanan kapan saja.</p>
         </div>
-        <span class="auth-brand-footer">© <?= date('Y') ?> TokoKita</span>
+        <span class="auth-brand-footer">© <?= date('Y') ?> <?= htmlspecialchars($storeName, ENT_QUOTES, 'UTF-8') ?></span>
     </section>
     <section class="auth-form-panel">
         <div class="auth-form-wrap">
-            <span class="auth-mobile-brand"><span class="brand-mark">t<span>.</span></span><strong>tokokita</strong></span>
+            <span class="auth-mobile-brand"><?php if ($storeLogo): ?><img class="brand-logo" src="<?= htmlspecialchars($storeLogo, ENT_QUOTES, 'UTF-8') ?>" alt=""><?php else: ?><span class="brand-mark"><?= htmlspecialchars(mb_strtolower(mb_substr($storeName, 0, 1)), ENT_QUOTES, 'UTF-8') ?><span>.</span></span><?php endif; ?><strong><?= htmlspecialchars($storeName, ENT_QUOTES, 'UTF-8') ?></strong></span>
             <div class="auth-heading">
                 <span class="auth-heading-icon">✦</span>
                 <p class="eyebrow">DAFTAR PEMBELI</p>

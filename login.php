@@ -8,6 +8,11 @@ function loginEscape(string $value): string
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
 
+function normalizeRfidUid(string $value): string
+{
+    return strtoupper((string) preg_replace('/[\s:-]+/', '', trim($value)));
+}
+
 if (authUser() !== null) {
     header('Location: index.php?page=dashboard');
     exit;
@@ -17,9 +22,16 @@ $error = null;
 $databaseReady = false;
 $firstUser = false;
 $pdo = null;
+$storeName = 'TokoKita';
+$storeLogo = null;
 
 try {
     $pdo = tokokuPdo();
+    $storeName = tokokuSetting($pdo, 'store_name', 'TokoKita');
+    $logoName = tokokuSetting($pdo, 'store_logo');
+    if ($logoName !== '' && basename($logoName) === $logoName && is_file(__DIR__ . '/uploads/store/' . $logoName)) {
+        $storeLogo = 'uploads/store/' . $logoName;
+    }
     ensureAuthSchema($pdo);
     $firstUser = (int) $pdo->query('SELECT COUNT(*) FROM tbl_pengguna')->fetchColumn() === 0;
     $databaseReady = true;
@@ -77,6 +89,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $databaseReady) {
             exit;
         }
 
+        if (!$firstUser && $action === 'rfid_login') {
+            $uid = normalizeRfidUid((string) ($_POST['rfid_uid'] ?? ''));
+            $user = null;
+            if (preg_match('/^[A-Z0-9]{4,40}$/', $uid)) {
+                $statement = $pdo->prepare(
+                    "SELECT id_pengguna, username, role, id_pelanggan
+                     FROM tbl_pengguna WHERE rfid_uid = ? AND role = 'admin' LIMIT 1"
+                );
+                $statement->execute([$uid]);
+                $user = $statement->fetch();
+            }
+            if (!$user) {
+                $attempts++;
+                $_SESSION['login_attempts'] = $attempts;
+                if ($attempts >= 5) $_SESSION['login_locked_until'] = time() + 300;
+                throw new RuntimeException('Kartu RFID tidak dikenali. Coba lagi atau masuk dengan username dan kata sandi.');
+            }
+
+            session_regenerate_id(true);
+            $_SESSION['auth_user'] = [
+                'id' => (int) $user['id_pengguna'],
+                'username' => $user['username'],
+                'role' => 'admin',
+                'id_pelanggan' => null,
+            ];
+            unset($_SESSION['login_attempts'], $_SESSION['login_locked_until']);
+            header('Location: index.php?page=dashboard');
+            exit;
+        }
+
         if (!$firstUser && $action === 'login') {
             $statement = $pdo->prepare(
                 'SELECT id_pengguna, username, password_hash, role, id_pelanggan
@@ -126,15 +168,15 @@ $remainingSeconds = max(0, (int) ($_SESSION['login_locked_until'] ?? 0) - time()
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f7f8fa">
-    <title><?= $firstUser ? 'Buat Akun Admin' : 'Masuk' ?> — TokoKita</title>
-    <link rel="stylesheet" href="style.css?v=auth-responsive">
+    <title><?= $firstUser ? 'Buat Akun Admin' : 'Masuk' ?> — <?= loginEscape($storeName) ?></title>
+    <link rel="stylesheet" href="style.css?v=store-logo-size">
 </head>
 <body class="auth-page">
 <main class="auth-shell">
     <section class="auth-brand-panel">
-        <a class="brand auth-brand" href="login.php" aria-label="TokoKita">
-            <span class="brand-mark">t<span>.</span></span>
-            <span class="brand-copy">tokokita<small>STORE MANAGEMENT</small></span>
+        <a class="brand auth-brand" href="login.php" aria-label="<?= loginEscape($storeName) ?>">
+            <?php if ($storeLogo): ?><img class="brand-logo" src="<?= loginEscape($storeLogo) ?>" alt=""><?php else: ?><span class="brand-mark"><?= loginEscape(mb_strtolower(mb_substr($storeName, 0, 1))) ?><span>.</span></span><?php endif; ?>
+            <span class="brand-copy"><?= loginEscape($storeName) ?><small>STORE MANAGEMENT</small></span>
         </a>
         <div class="auth-illustration" aria-hidden="true">
             <span class="illustration-orbit orbit-one"></span>
@@ -144,22 +186,22 @@ $remainingSeconds = max(0, (int) ($_SESSION['login_locked_until'] ?? 0) - time()
             <span class="illustration-spark spark-two">✦</span>
         </div>
         <div class="auth-brand-copy">
-            <p class="eyebrow">TOKOKITA · SISTEM PENJUALAN</p>
+            <p class="eyebrow"><?= loginEscape(mb_strtoupper($storeName)) ?> · SISTEM PENJUALAN</p>
             <h1>Semua operasional toko, dalam satu tempat.</h1>
             <p>Kelola produk, pelanggan, dan transaksi dengan lebih mudah.</p>
         </div>
-        <span class="auth-brand-footer">© <?= date('Y') ?> TokoKita</span>
+        <span class="auth-brand-footer">© <?= date('Y') ?> <?= loginEscape($storeName) ?></span>
     </section>
 
     <section class="auth-form-panel">
         <div class="auth-form-wrap">
-            <span class="auth-mobile-brand"><span class="brand-mark">t<span>.</span></span><strong>tokokita</strong></span>
+            <span class="auth-mobile-brand"><?php if ($storeLogo): ?><img class="brand-logo" src="<?= loginEscape($storeLogo) ?>" alt=""><?php else: ?><span class="brand-mark"><?= loginEscape(mb_strtolower(mb_substr($storeName, 0, 1))) ?><span>.</span></span><?php endif; ?><strong><?= loginEscape($storeName) ?></strong></span>
             <div class="auth-heading">
                 <span class="auth-heading-icon"><?= $firstUser ? '✦' : '↗' ?></span>
                 <p class="eyebrow"><?= $firstUser ? 'PENGATURAN AWAL' : 'SELAMAT DATANG KEMBALI' ?></p>
                 <h2><?= $firstUser ? 'Buat akun admin' : 'Masuk ke akun Anda' ?></h2>
                 <p><?= $firstUser
-                    ? 'Buat akun admin untuk mulai mengelola TokoKita.'
+                    ? 'Buat akun admin untuk mulai mengelola ' . loginEscape($storeName) . '.'
                     : 'Masuk untuk melanjutkan ke dashboard toko.' ?></p>
             </div>
 
@@ -186,9 +228,18 @@ $remainingSeconds = max(0, (int) ($_SESSION['login_locked_until'] ?? 0) - time()
                     <?= $firstUser ? 'Buat akun admin' : 'Masuk ke dashboard' ?><span>→</span>
                 </button>
             </form>
+            <?php if (!$firstUser): ?>
+            <form method="post" class="auth-form rfid-login-form">
+                <input type="hidden" name="csrf_token" value="<?= loginEscape(authCsrfToken()) ?>">
+                <input type="hidden" name="action" value="rfid_login">
+                <label for="rfid_uid">Masuk admin dengan kartu RFID</label>
+                <div class="auth-input-wrap"><span>▣</span><input id="rfid_uid" name="rfid_uid" type="text" maxlength="48" autocomplete="off" placeholder="Tempelkan kartu ke pembaca" required autofocus <?= $isLocked ? 'disabled' : '' ?>></div>
+                <button class="button button-secondary auth-submit" type="submit" <?= $isLocked ? 'disabled' : '' ?>>Masuk dengan kartu</button>
+            </form>
+            <?php endif; ?>
             <?php endif; ?>
 
-            <div class="auth-security"><span>♧</span> Akses aman · Kata sandi disimpan dengan enkripsi hash</div>
+            <div class="auth-security"><span>♧</span> Admin dapat masuk dengan kata sandi atau kartu RFID</div>
             <?php if (!$firstUser && $databaseReady): ?>
                 <a class="auth-register-link" href="register.php">Belum punya akun pembeli? Daftar di sini</a>
             <?php endif; ?>
