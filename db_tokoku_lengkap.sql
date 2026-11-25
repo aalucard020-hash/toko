@@ -21,10 +21,12 @@ CREATE TABLE IF NOT EXISTS tbl_pengguna (
   username VARCHAR(50) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   role VARCHAR(20) NOT NULL DEFAULT 'admin',
+  rfid_uid VARCHAR(40) DEFAULT NULL,
   id_pelanggan INT DEFAULT NULL,
   dibuat_pada DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id_pengguna),
   UNIQUE KEY uq_pengguna_username (username),
+  UNIQUE KEY uq_pengguna_rfid_uid (rfid_uid),
   UNIQUE KEY uq_pengguna_pelanggan (id_pelanggan)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -33,7 +35,11 @@ ALTER TABLE tbl_pengguna
 ALTER TABLE tbl_pengguna
   ADD COLUMN IF NOT EXISTS id_pelanggan INT DEFAULT NULL;
 ALTER TABLE tbl_pengguna
+  ADD COLUMN IF NOT EXISTS rfid_uid VARCHAR(40) DEFAULT NULL;
+ALTER TABLE tbl_pengguna
   ADD UNIQUE INDEX IF NOT EXISTS uq_pengguna_pelanggan (id_pelanggan);
+ALTER TABLE tbl_pengguna
+  ADD UNIQUE INDEX IF NOT EXISTS uq_pengguna_rfid_uid (rfid_uid);
 
 CREATE TABLE IF NOT EXISTS tbl_kategori (
   id_kategori INT NOT NULL AUTO_INCREMENT,
@@ -80,11 +86,14 @@ CREATE TABLE IF NOT EXISTS tbl_transaksi (
   subtotal DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   diskon DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   total_belanja DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-  metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Tunai',
+  metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'COD',
   status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas',
+  bukti_pembayaran VARCHAR(255) DEFAULT NULL,
+  id_pengguna INT DEFAULT NULL,
   PRIMARY KEY (id_transaksi),
   KEY idx_transaksi_pelanggan_tanggal (id_pelanggan, tanggal),
   KEY idx_transaksi_tanggal (tanggal),
+  KEY idx_transaksi_pengguna (id_pengguna),
   CONSTRAINT fk_transaksi_pelanggan
     FOREIGN KEY (id_pelanggan) REFERENCES tbl_pelanggan (id_pelanggan)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -95,9 +104,20 @@ ALTER TABLE tbl_transaksi
 ALTER TABLE tbl_transaksi
   ADD COLUMN IF NOT EXISTS diskon DECIMAL(12,2) NOT NULL DEFAULT 0.00;
 ALTER TABLE tbl_transaksi
-  ADD COLUMN IF NOT EXISTS metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Tunai';
+  ADD COLUMN IF NOT EXISTS metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'COD';
+ALTER TABLE tbl_transaksi
+  ALTER COLUMN metode_pembayaran SET DEFAULT 'COD';
+UPDATE tbl_transaksi
+SET metode_pembayaran = 'COD'
+WHERE UPPER(metode_pembayaran) = 'TUNAI';
 ALTER TABLE tbl_transaksi
   ADD COLUMN IF NOT EXISTS status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas';
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS bukti_pembayaran VARCHAR(255) DEFAULT NULL;
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS id_pengguna INT DEFAULT NULL;
+ALTER TABLE tbl_transaksi
+  ADD INDEX IF NOT EXISTS idx_transaksi_pengguna (id_pengguna);
 UPDATE tbl_transaksi
 SET subtotal = total_belanja
 WHERE subtotal = 0 AND total_belanja > 0;
@@ -262,10 +282,10 @@ BEGIN
   SET v_diskon = fn_hitung_diskon(v_subtotal);
 
   INSERT INTO tbl_transaksi
-    (tanggal, id_pelanggan, subtotal, diskon, total_belanja)
+    (tanggal, id_pelanggan, subtotal, diskon, total_belanja, metode_pembayaran, status_pembayaran)
   VALUES
     (CURDATE(), p_id_pelanggan, v_subtotal, v_diskon,
-     fn_hitung_total(v_subtotal));
+     fn_hitung_total(v_subtotal), 'COD', 'Menunggu');
 
   SET v_id_transaksi = LAST_INSERT_ID();
 

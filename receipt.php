@@ -75,6 +75,12 @@ if (!$transactionId || $transactionId < 1) {
 
 try {
     $pdo = tokokuPdo();
+    $storeName = tokokuSetting($pdo, 'store_name', 'TokoKita');
+    $logoName = tokokuSetting($pdo, 'store_logo');
+    $storeLogo = $logoName !== '' && basename($logoName) === $logoName
+        && is_file(__DIR__ . '/uploads/store/' . $logoName)
+        ? 'uploads/store/' . $logoName
+        : null;
     $header = $pdo->prepare(
         'SELECT t.id_transaksi, t.tanggal, t.subtotal, t.diskon, t.total_belanja,
                 t.metode_pembayaran, t.status_pembayaran,
@@ -116,13 +122,14 @@ $money = static fn (mixed $amount): string => 'Rp ' . number_format((float) $amo
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Struk #<?= (int) $transaction['id_transaksi'] ?> — TokoKita</title>
+    <title>Struk #<?= (int) $transaction['id_transaksi'] ?> — <?= receiptEscape($storeName) ?></title>
     <style>
         @page { size: 58mm auto; margin: 0; }
         * { box-sizing: border-box; }
         body { width: 58mm; margin: 0 auto; color: #111; background: #fff; font: 10px/1.35 Arial, sans-serif; }
         .receipt { width: 58mm; padding: 3mm 4mm; }
         h1 { margin: 0; font-size: 15px; text-align: center; }
+        .store-logo { display: block; width: 44px; height: 44px; margin: 0 auto 4px; object-fit: contain; }
         .center { margin: 2px 0; text-align: center; }
         .muted { color: #444; }
         .rule { margin: 7px 0; border-top: 1px dashed #555; }
@@ -141,7 +148,8 @@ $money = static fn (mixed $amount): string => 'Rp ' . number_format((float) $amo
 </head>
 <body>
 <main class="receipt">
-    <h1>TOKOKITA</h1>
+    <?php if ($storeLogo): ?><img class="store-logo" src="<?= receiptEscape($storeLogo) ?>" alt="Logo <?= receiptEscape($storeName) ?>"><?php endif; ?>
+    <h1><?= receiptEscape(mb_strtoupper($storeName)) ?></h1>
     <p class="center muted">Terima kasih telah berbelanja</p>
     <div class="rule"></div>
     <div class="meta"><span>Transaksi</span><strong>#<?= (int) $transaction['id_transaksi'] ?></strong></div>

@@ -53,6 +53,8 @@ $canPrintReceipt = in_array($role, ['admin', 'cashier'], true);
 $pageTitles = [
     'dashboard' => 'Dashboard',
     'transactions' => 'Transaksi',
+    'reports' => 'Laporan Penjualan',
+    'settings' => 'Pengaturan',
     'products' => 'Produk',
     'customers' => 'Pelanggan',
     'activity' => 'Aktivitas',
@@ -61,8 +63,8 @@ $pageTitles = [
     'my_orders' => 'Pesanan Saya',
 ];
 $allowedPages = match ($role) {
-    'admin' => ['dashboard', 'transactions', 'products', 'customers', 'activity', 'users'],
-    'cashier' => ['dashboard', 'transactions', 'products', 'customers', 'activity'],
+    'admin' => ['dashboard', 'transactions', 'reports', 'settings', 'products', 'customers', 'activity', 'users'],
+    'cashier' => ['dashboard', 'transactions', 'reports', 'products', 'customers', 'activity'],
     'buyer' => ['shop', 'my_orders'],
     default => [],
 };
@@ -78,6 +80,27 @@ $transactions = $products = $customers = $categories = $logs = $monthlySales = $
 $buyerName = '';
 $qrisImage = null;
 $qrisImageName = null;
+$storeName = 'TokoKita';
+$storeLogo = null;
+$storeLogoName = null;
+$adminRfidEnrolled = false;
+$reportRows = [];
+$reportTotal = 0;
+$cashierUsers = [];
+$reportCashierId = null;
+$requestedCashierId = $_GET['cashier_id'] ?? null;
+if ($canManage && is_string($requestedCashierId) && preg_match('/^\d+$/', $requestedCashierId)) {
+    $reportCashierId = (int) $requestedCashierId;
+}
+$reportFrom = (string) ($_GET['from'] ?? date('Y-m-01'));
+$reportTo = (string) ($_GET['to'] ?? date('Y-m-d'));
+$isValidReportDate = static function (string $date): bool {
+    $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+    return $parsed !== false && $parsed->format('Y-m-d') === $date;
+};
+if (!$isValidReportDate($reportFrom)) $reportFrom = date('Y-m-01');
+if (!$isValidReportDate($reportTo)) $reportTo = date('Y-m-d');
+if ($reportFrom > $reportTo) $reportTo = $reportFrom;
 
 try {
     $pdo = tokokuPdo();
@@ -102,9 +125,13 @@ try {
     if ($isBuyer) {
         $statement = $pdo->prepare(
             'SELECT v.id_transaksi, v.tanggal, v.nama_pelanggan, v.subtotal, v.diskon, v.total_belanja,
-                    t.metode_pembayaran, t.status_pembayaran
+                    t.metode_pembayaran, t.status_pembayaran, t.bukti_pembayaran,
+                    CASE WHEN t.status_pembayaran <> \'Lunas\' THEN \'Belum diverifikasi\'
+                         WHEN u.role IN (\'admin\', \'cashier\') THEN u.username
+                         WHEN t.id_pengguna IS NULL THEN \'Tidak tercatat\' ELSE \'Admin\' END AS nama_kasir
              FROM vw_laporan_penjualan AS v
              JOIN tbl_transaksi AS t ON t.id_transaksi = v.id_transaksi
+             LEFT JOIN tbl_pengguna AS u ON u.id_pengguna = t.id_pengguna
              WHERE v.id_pelanggan = ?
              ORDER BY v.tanggal DESC, v.id_transaksi DESC LIMIT 50'
         );
@@ -113,7 +140,7 @@ try {
     } else {
         $transactions = $pdo->query(
             'SELECT v.id_transaksi, v.tanggal, v.nama_pelanggan, v.subtotal, v.diskon, v.total_belanja,
-                    t.metode_pembayaran, t.status_pembayaran
+                    t.metode_pembayaran, t.status_pembayaran, t.bukti_pembayaran
              FROM vw_laporan_penjualan AS v
              JOIN tbl_transaksi AS t ON t.id_transaksi = v.id_transaksi
              ORDER BY v.tanggal DESC, v.id_transaksi DESC LIMIT 8'
@@ -154,6 +181,13 @@ try {
         $qrisImageName = $storedQrisName;
         $qrisImage = 'uploads/qris/' . $storedQrisName;
     }
+    $storeName = tokokuSetting($pdo, 'store_name', 'TokoKita');
+    $storedLogo = tokokuSetting($pdo, 'store_logo');
+    if ($storedLogo !== '' && basename($storedLogo) === $storedLogo
+        && is_file(__DIR__ . '/uploads/store/' . $storedLogo)) {
+        $storeLogoName = $storedLogo;
+        $storeLogo = 'uploads/store/' . $storedLogo;
+    }
     $logs = $pdo->query(
         'SELECT id_log, waktu, nama_tabel, aksi, id_data, keterangan, pengguna
          FROM tbl_log ORDER BY waktu DESC, id_log DESC LIMIT 20'
@@ -175,6 +209,45 @@ try {
             'SELECT id_pengguna, username, role, id_pelanggan, dibuat_pada
              FROM tbl_pengguna ORDER BY FIELD(role, \'admin\', \'cashier\', \'buyer\'), username'
         )->fetchAll();
+    }
+    if ($canManage && $page === 'settings') {
+        ensureAuthSchema($pdo);
+        $rfidStatus = $pdo->prepare("SELECT rfid_uid FROM tbl_pengguna WHERE id_pengguna = ? AND role = 'admin'");
+        $rfidStatus->execute([$currentUser['id']]);
+        $adminRfidEnrolled = (string) $rfidStatus->fetchColumn() !== '';
+    }
+    if ($page === 'reports') {
+        if ($canManage) {
+            $cashierUsers = $pdo->query(
+                "SELECT id_pengguna, username FROM tbl_pengguna WHERE role = 'cashier' ORDER BY username"
+            )->fetchAll();
+            if ($reportCashierId !== null && $reportCashierId > 0
+                && !in_array($reportCashierId, array_map('intval', array_column($cashierUsers, 'id_pengguna')), true)) {
+                $reportCashierId = null;
+            }
+        }
+        $reportSql =
+            'SELECT v.id_transaksi, v.tanggal, v.nama_pelanggan, v.subtotal, v.diskon, v.total_belanja,
+                    t.metode_pembayaran, t.status_pembayaran,
+                    CASE WHEN t.status_pembayaran <> \'Lunas\' THEN \'Belum diverifikasi\'
+                         WHEN t.id_pengguna IS NULL THEN \'Tidak tercatat\'
+                         WHEN u.role IN (\'admin\', \'cashier\') THEN u.username ELSE \'Admin\' END AS nama_kasir
+             FROM vw_laporan_penjualan AS v
+             JOIN tbl_transaksi AS t ON t.id_transaksi = v.id_transaksi
+             LEFT JOIN tbl_pengguna AS u ON u.id_pengguna = t.id_pengguna
+             WHERE v.tanggal >= ? AND v.tanggal < DATE_ADD(?, INTERVAL 1 DAY)';
+        $reportParams = [$reportFrom, $reportTo];
+        if ($reportCashierId === 0) {
+            $reportSql .= ' AND (t.status_pembayaran <> \'Lunas\' OR u.role IS NULL OR u.role <> \'cashier\')';
+        } elseif ($reportCashierId !== null) {
+            $reportSql .= ' AND t.status_pembayaran = \'Lunas\' AND t.id_pengguna = ?';
+            $reportParams[] = $reportCashierId;
+        }
+        $reportSql .= ' ORDER BY v.tanggal, v.id_transaksi';
+        $reportStatement = $pdo->prepare($reportSql);
+        $reportStatement->execute($reportParams);
+        $reportRows = $reportStatement->fetchAll();
+        $reportTotal = array_sum(array_map(static fn (array $row): float => (float) $row['total_belanja'], $reportRows));
     }
 } catch (PDOException $exception) {
     $pageError = 'Database belum dapat diakses. Pastikan MySQL XAMPP aktif dan skrip db_tokoku_lengkap.sql sudah diimpor. Detail: '
@@ -212,7 +285,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ? $_POST['redirect']
         : $defaultPage;
     $action = (string) ($_POST['action'] ?? '');
-    $paymentMethod = 'TUNAI';
+    $paymentMethod = 'COD';
+    $transactionUserId = (int) $currentUser['id'];
     $createdTransactionId = null;
 
     try {
@@ -228,7 +302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         if (!$canManage && in_array($action, [
             'create_customer', 'update_customer', 'delete_customer',
-            'create_product', 'update_product', 'delete_product', 'create_category', 'create_cashier', 'upload_qris',
+            'create_product', 'update_product', 'delete_product', 'create_category', 'create_cashier', 'upload_qris', 'save_store_profile', 'save_admin_rfid', 'remove_admin_rfid',
         ], true)) {
             throw new RuntimeException('Hanya admin yang dapat mengelola data ini.');
         }
@@ -267,6 +341,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             $_SESSION['notice'] = ['type' => 'success', 'text' => 'Gambar QRIS toko berhasil diperbarui.'];
+        } elseif ($action === 'save_store_profile') {
+            if (!$canManage) {
+                throw new RuntimeException('Hanya admin yang dapat mengubah identitas toko.');
+            }
+            $newStoreName = trim((string) ($_POST['store_name'] ?? ''));
+            if ($newStoreName === '' || mb_strlen($newStoreName) > 80) {
+                throw new RuntimeException('Nama toko wajib diisi dan maksimal 80 karakter.');
+            }
+            $storeLogoUpload = $_FILES['store_logo'] ?? null;
+            $newLogoName = null;
+            if (is_array($storeLogoUpload) && ($storeLogoUpload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+                if (($storeLogoUpload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK
+                    || (int) ($storeLogoUpload['size'] ?? 0) > 5 * 1024 * 1024) {
+                    throw new RuntimeException('Logo toko maksimal 5 MB.');
+                }
+                $imageInfo = @getimagesize((string) $storeLogoUpload['tmp_name']);
+                $extensions = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+                $mime = $imageInfo['mime'] ?? '';
+                if (!isset($extensions[$mime])) {
+                    throw new RuntimeException('Logo toko harus berformat JPG, PNG, atau WEBP.');
+                }
+                $logoDirectory = __DIR__ . '/uploads/store';
+                if (!is_dir($logoDirectory) && !mkdir($logoDirectory, 0755, true) && !is_dir($logoDirectory)) {
+                    throw new RuntimeException('Folder penyimpanan logo tidak dapat dibuat.');
+                }
+                $newLogoName = 'logo-' . bin2hex(random_bytes(12)) . '.' . $extensions[$mime];
+                if (!move_uploaded_file((string) $storeLogoUpload['tmp_name'], $logoDirectory . '/' . $newLogoName)) {
+                    throw new RuntimeException('Logo toko tidak dapat disimpan.');
+                }
+            }
+            $saveSetting = $pdo->prepare(
+                'INSERT INTO tbl_pengaturan (nama, nilai) VALUES (?, ?)
+                 ON DUPLICATE KEY UPDATE nilai = VALUES(nilai)'
+            );
+            $saveSetting->execute(['store_name', $newStoreName]);
+            if ($newLogoName !== null) {
+                $saveSetting->execute(['store_logo', $newLogoName]);
+                if (is_string($storeLogoName) && basename($storeLogoName) === $storeLogoName) {
+                    $oldLogo = __DIR__ . '/uploads/store/' . $storeLogoName;
+                    if (is_file($oldLogo)) @unlink($oldLogo);
+                }
+            }
+            $_SESSION['notice'] = ['type' => 'success', 'text' => 'Identitas toko berhasil diperbarui.'];
+        } elseif ($action === 'save_admin_rfid') {
+            if (!$canManage) {
+                throw new RuntimeException('Hanya admin yang dapat mengatur kartu RFID login.');
+            }
+            $uid = strtoupper((string) preg_replace('/[\s:-]+/', '', trim((string) ($_POST['rfid_uid'] ?? ''))));
+            if (!preg_match('/^[A-Z0-9]{4,40}$/', $uid)) {
+                throw new RuntimeException('UID kartu RFID harus 4–40 huruf atau angka.');
+            }
+            $saveRfid = $pdo->prepare(
+                'UPDATE tbl_pengguna SET rfid_uid = ? WHERE id_pengguna = ? AND role = \'admin\''
+            );
+            $saveRfid->execute([$uid, $currentUser['id']]);
+            $_SESSION['notice'] = [
+                'type' => 'success',
+                'text' => 'Kartu RFID login admin berhasil disimpan.',
+            ];
+        } elseif ($action === 'remove_admin_rfid') {
+            if (!$canManage) {
+                throw new RuntimeException('Hanya admin yang dapat mengatur kartu RFID login.');
+            }
+            $removeRfid = $pdo->prepare('UPDATE tbl_pengguna SET rfid_uid = NULL WHERE id_pengguna = ? AND role = \'admin\'');
+            $removeRfid->execute([$currentUser['id']]);
+            $_SESSION['notice'] = ['type' => 'success', 'text' => 'Kartu RFID login admin berhasil dilepas.'];
         } elseif ($action === 'create_cashier') {
             $username = trim((string) ($_POST['username'] ?? ''));
             $password = (string) ($_POST['password'] ?? '');
@@ -294,13 +434,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $statement->execute([$customerId, $productId, $quantity]);
             $result = $statement->fetch();
             $statement->closeCursor();
+            if (!empty($result['id_transaksi'])) {
+                $markCodPending = $pdo->prepare(
+                    "UPDATE tbl_transaksi SET metode_pembayaran = 'COD', status_pembayaran = 'Menunggu', id_pengguna = ? WHERE id_transaksi = ?"
+                );
+                $markCodPending->execute([(int) $currentUser['id'], (int) $result['id_transaksi']]);
+            }
             $_SESSION['notice'] = [
                 'type' => 'success',
                 'text' => 'Transaksi #' . ($result['id_transaksi'] ?? '') . ' berhasil disimpan.',
             ];
         } elseif ($action === 'add_cart_sale') {
-            $paymentMethod = strtoupper(trim((string) ($_POST['metode_pembayaran'] ?? 'TUNAI')));
-            if (!in_array($paymentMethod, ['TUNAI', 'QRIS'], true)) {
+            $paymentMethod = strtoupper(trim((string) ($_POST['metode_pembayaran'] ?? 'COD')));
+            if (!in_array($paymentMethod, ['COD', 'QRIS'], true)) {
                 throw new RuntimeException('Metode pembayaran yang dipilih tidak valid.');
             }
             if ($paymentMethod === 'QRIS' && $qrisImage === null) {
@@ -393,16 +539,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $amounts = $totals->fetch();
             $createTransaction = $pdo->prepare(
                 'INSERT INTO tbl_transaksi
-                    (tanggal, id_pelanggan, subtotal, diskon, total_belanja, metode_pembayaran, status_pembayaran)
-                 VALUES (CURDATE(), ?, ?, ?, ?, ?, ?)'
+                    (tanggal, id_pelanggan, subtotal, diskon, total_belanja, metode_pembayaran, status_pembayaran, id_pengguna)
+                 VALUES (CURDATE(), ?, ?, ?, ?, ?, ?, ?)'
             );
             $createTransaction->execute([
                 $customerId,
                 $subtotal,
                 $amounts['diskon'],
                 $amounts['total_belanja'],
-                $paymentMethod === 'QRIS' ? 'QRIS' : 'Tunai',
-                $paymentMethod === 'QRIS' ? 'Menunggu' : 'Lunas',
+                $paymentMethod,
+                'Menunggu',
+                $transactionUserId,
             ]);
             $transactionId = (int) $pdo->lastInsertId();
             $createdTransactionId = $transactionId;
@@ -564,14 +711,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $message = $exception->getMessage();
         if ($exception instanceof PDOException && $exception->getCode() === '23000') {
-            $message = str_contains($message, 'uq_kategori_nama')
+            $message = str_contains($message, 'uq_pengguna_rfid_uid')
+                ? 'Kartu RFID tersebut sudah terdaftar pada akun admin lain.'
+                : (str_contains($message, 'uq_kategori_nama')
                 ? 'Nama kategori tersebut sudah digunakan.'
                 : (str_contains($message, 'uq_produk_barcode')
                 ? 'Kode barcode sudah digunakan produk lain.'
                 : (str_contains($message, 'tbl_transaksi_ibfk')
                 || str_contains($message, 'fk_transaksi_pelanggan')
                 ? 'Pelanggan tidak dapat dihapus karena sudah memiliki transaksi.'
-                : 'Data tidak dapat dihapus karena masih digunakan oleh transaksi.'));
+                : 'Data tidak dapat dihapus karena masih digunakan oleh transaksi.')));
         } elseif ($exception instanceof PDOException) {
             $message = 'Perubahan gagal disimpan. Periksa data dan pastikan database masih tersedia.';
         }
@@ -579,7 +728,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $createdTransactionId = null;
     }
 
-    if ($action === 'add_cart_sale' && $paymentMethod === 'QRIS' && $createdTransactionId) {
+    if ($action === 'add_cart_sale' && $createdTransactionId) {
         header('Location: payment.php?id=' . $createdTransactionId);
     } else {
         header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '?page=' . rawurlencode($redirect));
@@ -596,16 +745,16 @@ $outOfStock = $lowStockCount;
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f5f6fa">
-    <title>Dashboard — TokoKita</title>
-    <link rel="stylesheet" href="style.css?v=mobile-menu">
+    <title><?= e($storeName) ?> — <?= e($pageTitles[$page]) ?></title>
+    <link rel="stylesheet" href="style.css?v=store-logo-size">
 </head>
 <body>
 <div class="app-shell">
     <button class="mobile-menu-backdrop" type="button" aria-label="Tutup menu" hidden></button>
     <aside class="sidebar" id="main-navigation">
-        <a class="brand" href="?page=dashboard" aria-label="TokoKita Dashboard">
-            <span class="brand-mark">t<span>.</span></span>
-            <span class="brand-copy">tokokita<small>STORE MANAGEMENT</small></span>
+        <a class="brand" href="?page=dashboard" aria-label="<?= e($storeName) ?> Dashboard">
+            <?php if ($storeLogo): ?><img class="brand-logo" src="<?= e($storeLogo) ?>" alt=""><?php else: ?><span class="brand-mark"><?= e(mb_strtolower(mb_substr($storeName, 0, 1))) ?><span>.</span></span><?php endif; ?>
+            <span class="brand-copy"><?= e($storeName) ?><small>STORE MANAGEMENT</small></span>
         </a>
         <div class="nav-caption">MENU</div>
         <nav class="navigation" aria-label="Navigasi utama">
@@ -615,11 +764,13 @@ $outOfStock = $lowStockCount;
             <?php else: ?>
                 <a class="nav-link <?= $page === 'dashboard' ? 'active' : '' ?>" href="?page=dashboard"><span class="nav-icon">⌂</span>Dashboard</a>
                 <a class="nav-link <?= $page === 'transactions' ? 'active' : '' ?>" href="?page=transactions"><span class="nav-icon">▤</span>Transaksi</a>
+                <a class="nav-link <?= $page === 'reports' ? 'active' : '' ?>" href="?page=reports"><span class="nav-icon">▤</span>Laporan</a>
                 <?php if ($canManage): ?>
                     <a class="nav-link <?= $page === 'products' ? 'active' : '' ?>" href="?page=products"><span class="nav-icon">▦</span>Produk</a>
                     <a class="nav-link <?= $page === 'customers' ? 'active' : '' ?>" href="?page=customers"><span class="nav-icon">♙</span>Pelanggan</a>
                     <a class="nav-link <?= $page === 'activity' ? 'active' : '' ?>" href="?page=activity"><span class="nav-icon">◷</span>Aktivitas</a>
                     <a class="nav-link <?= $page === 'users' ? 'active' : '' ?>" href="?page=users"><span class="nav-icon">♧</span>Pengguna</a>
+                    <a class="nav-link <?= $page === 'settings' ? 'active' : '' ?>" href="?page=settings"><span class="nav-icon">⚙</span>Pengaturan</a>
                 <?php elseif ($role === 'cashier'): ?>
                     <a class="nav-link <?= $page === 'products' ? 'active' : '' ?>" href="?page=products"><span class="nav-icon">▦</span>Produk</a>
                     <a class="nav-link <?= $page === 'customers' ? 'active' : '' ?>" href="?page=customers"><span class="nav-icon">♙</span>Pelanggan</a>
@@ -632,7 +783,7 @@ $outOfStock = $lowStockCount;
                 <span class="store-avatar"><?= e(mb_strtoupper(mb_substr(authUser()['username'], 0, 1))) ?></span>
                 <span><strong><?= e($currentUser['username']) ?></strong><small><?= $role === 'admin' ? 'Admin toko' : ($role === 'cashier' ? 'Kasir' : 'Pembeli') ?></small></span>
             </div>
-            <div class="sidebar-foot">SISTEM INFORMASI PENJUALAN<br>© <?= date('Y') ?> TOKOKITA</div>
+            <div class="sidebar-foot">SISTEM INFORMASI PENJUALAN<br>© <?= date('Y') ?> <?= e(mb_strtoupper($storeName)) ?></div>
         </div>
     </aside>
 
@@ -642,7 +793,7 @@ $outOfStock = $lowStockCount;
                 <span class="mobile-menu-icon" aria-hidden="true">☰</span>
                 <span>Menu</span>
             </button>
-            <div class="breadcrumb">TokoKita <span>/</span> <strong><?= e($pageTitles[$page]) ?></strong></div>
+            <div class="breadcrumb"><?= e($storeName) ?> <span>/</span> <strong><?= e($pageTitles[$page]) ?></strong></div>
             <div class="topbar-right">
                 <span class="top-search">⌕ <span>Cari apa saja...</span><kbd>⌘ K</kbd></span>
                 <span class="today-date"><?= e(tanggalIndonesia(date('Y-m-d'), true)) ?></span>
@@ -740,7 +891,7 @@ $outOfStock = $lowStockCount;
 
             <?php if (in_array($page, ['transactions', 'shop'], true)): ?>
             <section class="welcome-row page-heading-row">
-                <div><p class="eyebrow"><?= $isBuyer ? 'TOKOKITA · BELANJA' : 'PENJUALAN' ?></p><h1><?= $isBuyer ? 'Pilih produk untuk dibeli' : 'Transaksi' ?></h1><p class="muted"><?= $isBuyer ? 'Keranjang dan riwayat pesanan hanya terlihat oleh akun Anda.' : 'Catat transaksi baru dan lihat riwayat penjualan.' ?></p></div>
+                <div><p class="eyebrow"><?= $isBuyer ? e(mb_strtoupper($storeName)) . ' · BELANJA' : 'PENJUALAN' ?></p><h1><?= $isBuyer ? 'Pilih produk untuk dibeli' : 'Transaksi' ?></h1><p class="muted"><?= $isBuyer ? 'Keranjang dan riwayat pesanan hanya terlihat oleh akun Anda.' : 'Catat transaksi baru dan lihat riwayat penjualan.' ?></p></div>
             </section>
             <form method="post" class="shop-form" id="shop-form" data-role="<?= e($role) ?>">
                 <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
@@ -805,7 +956,7 @@ $outOfStock = $lowStockCount;
                         </div>
                         <label class="shop-payment-label">Metode pembayaran
                             <select name="metode_pembayaran">
-                                <option value="Tunai">Tunai</option>
+                                <option value="COD">COD</option>
                                 <option value="QRIS" <?= $qrisImage === null ? 'disabled' : '' ?>>QRIS<?= $qrisImage === null ? ' (QR toko belum diatur)' : '' ?></option>
                             </select>
                         </label>
@@ -825,20 +976,21 @@ $outOfStock = $lowStockCount;
                 <div class="panel-heading"><div><h2>Riwayat pesanan</h2><p class="muted">Hanya Anda yang dapat melihat daftar ini.</p></div></div>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>ID PESANAN</th><th>TANGGAL</th><th>SUBTOTAL</th><th>DISKON</th><th>TOTAL</th><th>STATUS</th></tr></thead>
+                        <thead><tr><th>ID PESANAN</th><th>TANGGAL</th><th>KASIR</th><th>SUBTOTAL</th><th>DISKON</th><th>TOTAL</th><th>STATUS</th></tr></thead>
                         <tbody>
                         <?php foreach ($buyerOrders as $order): ?>
                             <tr>
                                 <td><span class="transaction-id">#<?= (int) $order['id_transaksi'] ?></span></td>
                                 <td><?= e(tanggalIndonesia($order['tanggal'])) ?></td>
+                                <td><?= e($order['nama_kasir'] ?: 'Belum diverifikasi') ?></td>
                                 <td><?= rupiah($order['subtotal']) ?></td>
                                 <td class="discount-cell"><?= rupiah($order['diskon']) ?></td>
                                 <td><strong><?= rupiah($order['total_belanja']) ?></strong></td>
-                                <td><?php if ($order['status_pembayaran'] === 'Menunggu'): ?><a class="small-action" href="payment.php?id=<?= (int) $order['id_transaksi'] ?>">Bayar QRIS</a><?php else: ?><span class="badge badge-success"><i></i> Lunas · <?= e($order['metode_pembayaran']) ?></span><?php endif; ?></td>
+                                <td><?php if ($order['status_pembayaran'] === 'Menunggu'): ?><a class="small-action" href="payment.php?id=<?= (int) $order['id_transaksi'] ?>"><?= $order['metode_pembayaran'] === 'QRIS' ? (!empty($order['bukti_pembayaran']) ? 'Bukti terkirim' : 'Bayar QRIS') : 'Info COD' ?></a><?php else: ?><span class="badge badge-success"><i></i> Lunas · <?= e($order['metode_pembayaran']) ?></span><?php endif; ?></td>
                             </tr>
                         <?php endforeach; ?>
                         <?php if (!$buyerOrders): ?>
-                            <tr><td class="empty-cell" colspan="6">Anda belum memiliki pesanan. Mulai belanja untuk membuat pesanan pertama.</td></tr>
+                            <tr><td class="empty-cell" colspan="7">Anda belum memiliki pesanan. Mulai belanja untuk membuat pesanan pertama.</td></tr>
                         <?php endif; ?>
                         </tbody>
                     </table>
@@ -932,20 +1084,73 @@ $outOfStock = $lowStockCount;
             </section>
             <?php endif; ?>
 
-            <?php if ($page === 'transactions' && !$isBuyer): ?>
-            <?php if ($canManage): ?>
+            <?php if ($page === 'settings' && $canManage): ?>
+            <div class="settings-content">
+            <section class="welcome-row">
+                <div><p class="eyebrow">PREFERENSI TOKO</p><h1>Pengaturan</h1><p class="muted">Atur identitas toko dan informasi pembayaran QRIS.</p></div>
+            </section>
+            <section class="panel store-profile-panel">
+                <div><h2>Identitas toko</h2><p class="muted">Nama dan logo tampil di aplikasi, halaman masuk, dan struk.</p></div>
+                <?php if ($storeLogo): ?><img class="store-profile-preview" src="<?= e($storeLogo) ?>" alt="Logo toko saat ini"><?php endif; ?>
+                <form method="post" enctype="multipart/form-data" class="store-profile-form">
+                    <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                    <input type="hidden" name="action" value="save_store_profile">
+                    <input type="hidden" name="redirect" value="settings">
+                    <label>Nama toko<input name="store_name" maxlength="80" value="<?= e($storeName) ?>" required></label>
+                    <label>Logo toko (PNG, JPG, WEBP; maks. 5 MB)<input type="file" name="store_logo" accept="image/png,image/jpeg,image/webp"></label>
+                    <button class="button button-primary" type="submit">Simpan identitas toko</button>
+                </form>
+            </section>
             <section class="panel qris-settings-panel">
-                <div><h2>Pengaturan QRIS</h2><p class="muted">Unggah gambar QRIS toko agar pelanggan bisa memilih pembayaran QRIS.</p></div>
+                <div><h2>Pengaturan QRIS</h2><p class="muted">Unggah gambar QRIS agar pelanggan dapat membayar dengan QRIS.</p></div>
                 <?php if ($qrisImage): ?><img class="qris-settings-preview" src="<?= e($qrisImage) ?>" alt="QRIS toko saat ini"><?php endif; ?>
                 <form method="post" enctype="multipart/form-data" class="qris-upload-form">
                     <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
                     <input type="hidden" name="action" value="upload_qris">
-                    <input type="hidden" name="redirect" value="transactions">
+                    <input type="hidden" name="redirect" value="settings">
                     <label>Gambar QRIS (PNG, JPG, WEBP; maks. 5 MB)<input type="file" name="qris_image" accept="image/png,image/jpeg,image/webp" required></label>
                     <button class="button button-primary" type="submit"><?= $qrisImage ? 'Ganti QRIS' : 'Simpan QRIS' ?></button>
                 </form>
             </section>
+            <section class="panel rfid-settings-panel">
+                <div><h2>Login admin dengan kartu RFID</h2><p class="muted">Daftarkan UID dari pembaca RFID USB untuk akun admin yang sedang digunakan.</p></div>
+                <div class="rfid-enrollment-status"><span class="status-dot"></span><?= $adminRfidEnrolled ? 'Kartu admin sudah terdaftar' : 'Belum ada kartu untuk akun ini' ?></div>
+                <form method="post" class="rfid-settings-form">
+                    <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                    <input type="hidden" name="action" value="save_admin_rfid">
+                    <input type="hidden" name="redirect" value="settings">
+                    <label>UID kartu (tempel kartu ke pembaca)<input name="rfid_uid" maxlength="48" autocomplete="off" placeholder="UID akan terbaca dari kartu" required></label>
+                    <button class="button button-primary" type="submit">Daftarkan kartu</button>
+                </form>
+                <?php if ($adminRfidEnrolled): ?><form method="post" class="rfid-remove-form" onsubmit="return confirm('Lepas kartu RFID dari akun admin ini?')"><input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>"><input type="hidden" name="action" value="remove_admin_rfid"><input type="hidden" name="redirect" value="settings"><button class="small-action danger-action" type="submit">Lepas kartu RFID</button></form><?php endif; ?>
+            </section>
+            </div>
             <?php endif; ?>
+
+            <?php if ($page === 'reports'): ?>
+            <section class="welcome-row">
+                <div><p class="eyebrow">RINGKASAN PENJUALAN</p><h1>Laporan Penjualan</h1><p class="muted">Pilih periode dan kasir untuk melihat atau mengunduh laporan transaksi.</p></div>
+            </section>
+            <section class="panel table-panel report-panel">
+                <form method="get" class="report-filter">
+                    <input type="hidden" name="page" value="reports">
+                    <label>Dari tanggal<input type="date" name="from" value="<?= e($reportFrom) ?>" required></label>
+                    <label>Sampai tanggal<input type="date" name="to" value="<?= e($reportTo) ?>" min="<?= e($reportFrom) ?>" required></label>
+                    <?php if ($canManage): ?>
+                    <label>Kasir<select name="cashier_id"><option value="">Semua transaksi</option><option value="0" <?= $reportCashierId === 0 ? 'selected' : '' ?>>Belum ditangani kasir</option><?php foreach ($cashierUsers as $cashier): ?><option value="<?= (int) $cashier['id_pengguna'] ?>" <?= $reportCashierId === (int) $cashier['id_pengguna'] ? 'selected' : '' ?>><?= e($cashier['username']) ?></option><?php endforeach; ?></select></label>
+                    <?php endif; ?>
+                    <button class="button button-primary" type="submit">Tampilkan</button>
+                    <a class="button button-secondary" href="laporan.php?from=<?= rawurlencode($reportFrom) ?>&amp;to=<?= rawurlencode($reportTo) ?><?= $canManage && $reportCashierId !== null ? '&amp;cashier_id=' . $reportCashierId : '' ?>">Ekspor PDF</a>
+                </form>
+                <div class="management-stats report-summary"><article class="management-stat"><span class="management-stat-copy"><small>Jumlah transaksi</small><strong><?= number_format(count($reportRows), 0, ',', '.') ?></strong></span></article><article class="management-stat"><span class="management-stat-copy"><small>Total penjualan</small><strong><?= e(rupiah($reportTotal)) ?></strong></span></article></div>
+                <div class="table-wrap"><table><thead><tr><th>ID</th><th>TANGGAL</th><th>PELANGGAN</th><th>KASIR</th><th>SUBTOTAL</th><th>DISKON</th><th>TOTAL</th><th>PEMBAYARAN</th><th>STATUS</th></tr></thead><tbody>
+                <?php foreach ($reportRows as $row): ?><tr><td>#<?= (int) $row['id_transaksi'] ?></td><td><?= e(tanggalIndonesia((string) $row['tanggal'])) ?></td><td><?= e($row['nama_pelanggan']) ?></td><td><?= e($row['nama_kasir']) ?></td><td><?= e(rupiah($row['subtotal'])) ?></td><td><?= e(rupiah($row['diskon'])) ?></td><td><strong><?= e(rupiah($row['total_belanja'])) ?></strong></td><td><?= e($row['metode_pembayaran']) ?></td><td><?= e($row['status_pembayaran']) ?></td></tr><?php endforeach; ?>
+                <?php if (!$reportRows): ?><tr><td colspan="9" class="empty-state">Tidak ada transaksi pada periode ini.</td></tr><?php endif; ?>
+                </tbody></table></div>
+            </section>
+            <?php endif; ?>
+
+            <?php if ($page === 'transactions' && !$isBuyer): ?>
             <section class="panel barcode-sale-panel">
                 <div class="panel-heading"><div><h2>Transaksi dengan barcode</h2><p class="muted">Scan barcode dengan scanner USB atau kamera, atau ketik kodenya.</p></div></div>
                 <form method="post" class="barcode-sale-form" id="barcode-sale-form">
@@ -953,7 +1158,7 @@ $outOfStock = $lowStockCount;
                     <input type="hidden" name="action" value="add_cart_sale">
                     <input type="hidden" name="redirect" value="transactions">
                     <label>Pelanggan<select name="id_pelanggan" required><option value="">Pilih pelanggan</option><?php foreach ($customers as $customer): ?><option value="<?= (int) $customer['id_pelanggan'] ?>"><?= e($customer['nama_pelanggan']) ?></option><?php endforeach; ?></select></label>
-                    <label>Metode pembayaran<select name="metode_pembayaran"><option value="Tunai">Tunai</option><option value="QRIS" <?= $qrisImage === null ? 'disabled' : '' ?>>QRIS<?= $qrisImage === null ? ' (QR toko belum diatur)' : '' ?></option></select></label>
+                    <label>Metode pembayaran<select name="metode_pembayaran"><option value="COD">COD</option><option value="QRIS" <?= $qrisImage === null ? 'disabled' : '' ?>>QRIS<?= $qrisImage === null ? ' (QR toko belum diatur)' : '' ?></option></select></label>
                     <label>Scan / masukkan barcode<span class="barcode-entry"><input id="transaction-barcode" autocomplete="off" placeholder="Arahkan scanner lalu scan atau ketik kode" data-barcode-value><button type="button" class="small-action" data-camera-scan>Scan kamera</button></span></label>
                     <div class="barcode-feedback" id="transaction-barcode-feedback" role="status" aria-live="polite">Siap memindai barcode.</div>
                     <div class="barcode-sale-lines" id="barcode-sale-lines"><p class="muted">Belum ada barang dalam transaksi.</p></div>
@@ -984,7 +1189,7 @@ $outOfStock = $lowStockCount;
                                 <td><?= rupiah($transaction['subtotal']) ?></td>
                                 <td class="discount-cell"><?= rupiah($transaction['diskon']) ?></td>
                                 <td><strong><?= rupiah($transaction['total_belanja']) ?></strong></td>
-                                <td><?php if ($transaction['status_pembayaran'] === 'Menunggu'): ?><a class="badge badge-pending" href="payment.php?id=<?= (int) $transaction['id_transaksi'] ?>">Menunggu · QRIS</a><?php else: ?><span class="badge badge-success"><i></i> Lunas · <?= e($transaction['metode_pembayaran']) ?></span><?php endif; ?></td>
+                                <td><?php if ($transaction['status_pembayaran'] === 'Menunggu'): ?><a class="badge badge-pending" href="payment.php?id=<?= (int) $transaction['id_transaksi'] ?>"><?= $transaction['metode_pembayaran'] === 'QRIS' && !empty($transaction['bukti_pembayaran']) ? 'Bukti · verifikasi' : 'Menunggu · ' . e($transaction['metode_pembayaran']) ?></a><?php else: ?><span class="badge badge-success"><i></i> Lunas · <?= e($transaction['metode_pembayaran']) ?></span><?php endif; ?></td>
                                 <?php if ($canPrintReceipt): ?><td><a class="small-action receipt-link" href="receipt.php?id=<?= (int) $transaction['id_transaksi'] ?>" target="_blank" rel="noopener">Cetak struk</a></td><?php endif; ?>
                             </tr>
                         <?php endforeach; ?>
@@ -1200,7 +1405,7 @@ $outOfStock = $lowStockCount;
             </section>
             <?php endif; ?>
 
-            <footer class="page-footer"><span>© <?= date('Y') ?> TokoKita · Sistem Informasi Penjualan</span><span>Dibuat untuk pengelolaan toko yang lebih mudah <b>♥</b></span></footer>
+            <footer class="page-footer"><span>© <?= date('Y') ?> <?= e($storeName) ?> · Sistem Informasi Penjualan</span><span>Dibuat untuk pengelolaan toko yang lebih mudah <b>♥</b></span></footer>
         </div>
     </main>
 </div>

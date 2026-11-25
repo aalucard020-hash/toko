@@ -25,6 +25,8 @@ button, input, select { font: inherit; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 7px 30px; color: #242832; }
 .brand-mark { width: 29px; height: 29px; display: flex; align-items: center; justify-content: center; border-radius: 8px; color: #fff; background: #f28a32; font: 800 20px "Segoe UI", Arial, sans-serif; }
 .brand-mark span { color: #fff0dc; }
+.brand-logo { width: 29px; height: 29px; max-width: 29px; max-height: 29px; flex: 0 0 29px; object-fit: contain; border-radius: 7px; }
+.auth-mobile-brand .brand-logo { width: 32px; height: 32px; max-width: 32px; max-height: 32px; flex-basis: 32px; }
 .brand-copy { font: 800 15px "Segoe UI", Arial, sans-serif; letter-spacing: -.5px; }
 .brand-copy small { display: block; margin-top: 2px; color: #a0a4ad; font: 600 7px "Segoe UI", Arial, sans-serif; letter-spacing: 1px; }
 .nav-caption { padding: 0 11px 8px; color: #9a9eaa; font-size: 9px; font-weight: 700; letter-spacing: .5px; }
@@ -34,6 +36,12 @@ button, input, select { font: inherit; }
 .nav-link.active { box-shadow: inset 2px 0 #f28a32; font-weight: 700; }
 .nav-icon { width: 16px; color: #777e89; font-size: 15px; text-align: center; }
 .nav-link.active .nav-icon { color: #ed8128; }
+.report-filter { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 18px; border-bottom: 1px solid var(--line); }
+.report-filter label { display: grid; gap: 6px; color: #777c8c; font-size: 10px; font-weight: 600; }
+.report-filter input, .report-filter select { min-height: 38px; padding: 0 10px; border: 1px solid #e4e7ed; border-radius: 7px; color: var(--ink); background: #fff; }
+.report-summary { margin: 0; padding: 15px 18px; }
+.report-summary .management-stat { min-height: 74px; }
+.report-summary .management-stat strong { font-size: 17px; }
 .sidebar-bottom { margin-top: auto; }
 .store-card { display: flex; align-items: center; gap: 10px; padding: 12px 8px; border-top: 1px solid #eceef1; border-bottom: 1px solid #eceef1; }
 .store-avatar, .top-avatar { width: 31px; height: 31px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; color: #fff; background: #f28a32; font-size: 10px; font-weight: 700; }
@@ -377,6 +385,22 @@ tbody tr:hover { background: #fcfcff; }
 .shop-payment-label, .qris-upload-form label { display: grid; gap: 6px; color: #626779; font-size: 10px; font-weight: 600; }
 .shop-payment-label select, .qris-upload-form input[type="file"] { width: 100%; min-width: 0; padding: 8px; border: 1px solid #e8eaf0; border-radius: 7px; color: #4a4e5e; background: #fff; font-size: 10px; }
 .qris-settings-panel { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(220px, 1.2fr); align-items: center; gap: 16px; margin-bottom: 16px; padding: 16px; }
+.store-profile-panel { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(260px, 1.4fr); align-items: center; gap: 16px; margin-bottom: 16px; padding: 16px; }
+.store-profile-panel h2 { margin-bottom: 4px; font-size: 14px; }
+.store-profile-preview { width: 72px; height: 72px; object-fit: contain; border: 1px solid #eceef2; border-radius: 8px; background: #fff; }
+.store-profile-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.store-profile-form label { display: grid; gap: 6px; color: #626779; font-size: 10px; font-weight: 600; }
+.store-profile-form input { width: 100%; min-width: 0; padding: 8px; border: 1px solid #e8eaf0; border-radius: 7px; color: #4a4e5e; background: #fff; font-size: 10px; }
+.store-profile-form .button { min-height: 34px; white-space: nowrap; }
+.settings-content { width: min(100%, 900px); }
+.rfid-settings-panel { display: grid; gap: 12px; margin-bottom: 16px; padding: 16px; }
+.rfid-settings-panel h2 { margin-bottom: 4px; font-size: 14px; }
+.rfid-enrollment-status { display: flex; align-items: center; color: #777c8c; font-size: 10px; }
+.rfid-settings-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.rfid-settings-form label { display: grid; gap: 6px; color: #626779; font-size: 10px; font-weight: 600; }
+.rfid-settings-form input { min-height: 38px; padding: 8px; border: 1px solid #e8eaf0; border-radius: 7px; color: #4a4e5e; background: #fff; font-size: 11px; }
+.rfid-remove-form { justify-self: start; }
+.rfid-login-form { margin-top: 17px; padding-top: 17px; border-top: 1px solid #eceef2; }
 .qris-settings-panel h2 { margin-bottom: 4px; font-size: 14px; }
 .qris-settings-preview { width: 86px; height: 86px; object-fit: contain; border: 1px solid #eceef2; border-radius: 8px; background: #fff; }
 .qris-upload-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
@@ -385,7 +409,13 @@ tbody tr:hover { background: #fcfcff; }
 .payment-qr { display: block; width: min(100%, 300px); max-height: 360px; object-fit: contain; margin: 16px auto; }
 .payment-total { margin: 16px 0; color: #d87522; font-size: 22px; font-weight: 750; }
 .payment-confirm-form { margin-top: 18px; }
-@media (max-width: 700px) { .qris-settings-panel { grid-template-columns: 1fr auto; } .qris-upload-form { grid-column: 1 / -1; } }
+.payment-proof-card { display: grid; gap: 10px; justify-items: center; margin: 16px 0; padding: 14px; border: 1px solid #e6e9ef; border-radius: 10px; background: #fafbfc; color: #414652; font-size: 11px; }
+.payment-proof-preview { display: block; width: min(100%, 220px); max-height: 280px; object-fit: contain; border: 1px solid #e2e5ea; border-radius: 7px; background: #fff; }
+.payment-proof-form { display: grid; justify-items: stretch; gap: 9px; margin-top: 16px; padding: 14px; border: 1px solid #e8eaf0; border-radius: 9px; text-align: left; }
+.payment-proof-form label { display: grid; gap: 8px; color: #515764; font-size: 11px; font-weight: 650; }
+.payment-proof-form input[type="file"] { width: 100%; padding: 8px; border: 1px solid #e6e8ed; border-radius: 7px; background: #fff; font-size: 10px; }
+.payment-proof-form small { color: #858b97; font-size: 9px; }
+@media (max-width: 800px) { .qris-settings-panel, .store-profile-panel { grid-template-columns: 1fr auto; } .qris-upload-form, .store-profile-form { grid-column: 1 / -1; } .store-profile-form { grid-template-columns: 1fr; } .rfid-settings-form { grid-template-columns: 1fr; } }
 .empty-cell { padding: 26px; color: #999dac; text-align: center; }
 
 .bottom-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); gap: 16px; margin: 17px 0; align-items: stretch; }

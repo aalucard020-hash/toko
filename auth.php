@@ -41,11 +41,27 @@ function ensurePaymentSchema(PDO $pdo): void
 {
     $pdo->exec(
         "ALTER TABLE tbl_transaksi
-         ADD COLUMN IF NOT EXISTS metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Tunai'"
+         ADD COLUMN IF NOT EXISTS metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'COD'"
     );
+    $paymentColumn = $pdo->query("SHOW COLUMNS FROM tbl_transaksi LIKE 'metode_pembayaran'")->fetch();
+    if ($paymentColumn && ($paymentColumn['Default'] ?? null) !== 'COD') {
+        $pdo->exec("ALTER TABLE tbl_transaksi ALTER COLUMN metode_pembayaran SET DEFAULT 'COD'");
+    }
     $pdo->exec(
         "ALTER TABLE tbl_transaksi
          ADD COLUMN IF NOT EXISTS status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas'"
+    );
+    $pdo->exec(
+        'ALTER TABLE tbl_transaksi
+         ADD COLUMN IF NOT EXISTS bukti_pembayaran VARCHAR(255) DEFAULT NULL'
+    );
+    $pdo->exec(
+        'ALTER TABLE tbl_transaksi
+         ADD COLUMN IF NOT EXISTS id_pengguna INT DEFAULT NULL'
+    );
+    $pdo->exec(
+        'ALTER TABLE tbl_transaksi
+         ADD INDEX IF NOT EXISTS idx_transaksi_pengguna (id_pengguna)'
     );
     $pdo->exec(
         'CREATE TABLE IF NOT EXISTS tbl_pengaturan (
@@ -54,6 +70,31 @@ function ensurePaymentSchema(PDO $pdo): void
             PRIMARY KEY (nama)
          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci'
     );
+    $migration = $pdo->prepare('SELECT nilai FROM tbl_pengaturan WHERE nama = ?');
+    $migration->execute(['cod_payment_migration']);
+    if ($migration->fetchColumn() === false) {
+        $pdo->beginTransaction();
+        try {
+            $markMigration = $pdo->prepare('INSERT IGNORE INTO tbl_pengaturan (nama, nilai) VALUES (?, ?)');
+            $markMigration->execute(['cod_payment_migration', 'done']);
+            if ($markMigration->rowCount() === 1) {
+                $pdo->exec("UPDATE tbl_transaksi SET metode_pembayaran = 'COD' WHERE UPPER(metode_pembayaran) = 'TUNAI'");
+            }
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            throw $exception;
+        }
+    }
+}
+
+function tokokuSetting(PDO $pdo, string $name, string $default = ''): string
+{
+    $statement = $pdo->prepare('SELECT nilai FROM tbl_pengaturan WHERE nama = ?');
+    $statement->execute([$name]);
+    $value = $statement->fetchColumn();
+
+    return is_string($value) && $value !== '' ? $value : $default;
 }
 
 function ensureProductBarcodeSchema(PDO $pdo): void
@@ -129,6 +170,7 @@ function ensureAuthSchema(PDO $pdo): void
             username VARCHAR(50) NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
             role VARCHAR(20) NOT NULL DEFAULT \'admin\',
+            rfid_uid VARCHAR(40) DEFAULT NULL,
             id_pelanggan INT DEFAULT NULL,
             dibuat_pada DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id_pengguna),
@@ -143,6 +185,14 @@ function ensureAuthSchema(PDO $pdo): void
     $pdo->exec(
         'ALTER TABLE tbl_pengguna
          ADD COLUMN IF NOT EXISTS id_pelanggan INT DEFAULT NULL'
+    );
+    $pdo->exec(
+        'ALTER TABLE tbl_pengguna
+         ADD COLUMN IF NOT EXISTS rfid_uid VARCHAR(40) DEFAULT NULL'
+    );
+    $pdo->exec(
+        'ALTER TABLE tbl_pengguna
+         ADD UNIQUE INDEX IF NOT EXISTS uq_pengguna_rfid_uid (rfid_uid)'
     );
     $pdo->exec(
         'ALTER TABLE tbl_pengguna
