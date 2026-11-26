@@ -99,6 +99,9 @@ try {
 
     $statement = $pdo->prepare(
         'SELECT t.id_transaksi, t.total_belanja, t.metode_pembayaran, t.status_pembayaran, t.bukti_pembayaran,
+                t.duitku_order_id,
+                t.duitku_payment_url, t.duitku_reference, t.duitku_payment_name,
+                t.duitku_va_number, t.duitku_qr_string, t.duitku_app_url,
                 p.nama_pelanggan, p.id_pelanggan
          FROM tbl_transaksi AS t
          JOIN tbl_pelanggan AS p ON p.id_pelanggan = t.id_pelanggan
@@ -141,6 +144,9 @@ try {
 
 $role = authUser()['role'];
 $isStaff = in_array($role, ['admin', 'cashier'], true);
+$isDuitkuQris = $transaction['metode_pembayaran'] === 'DUITKU'
+    && (!empty($transaction['duitku_qr_string'])
+        || str_contains(mb_strtoupper((string) ($transaction['duitku_payment_name'] ?? '')), 'QRIS'));
 $money = static fn (mixed $amount): string => 'Rp ' . number_format((float) $amount, 0, ',', '.');
 ?>
 <!doctype html>
@@ -149,7 +155,7 @@ $money = static fn (mixed $amount): string => 'Rp ' . number_format((float) $amo
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Pembayaran #<?= (int) $transaction['id_transaksi'] ?> · <?= paymentEscape($storeName) ?></title>
-    <link rel="stylesheet" href="style.css?v=payment-proof-compact">
+    <link rel="stylesheet" href="style.css?v=duitku-nobu-qris-v4">
 </head>
 <body>
 <main class="panel payment-panel">
@@ -179,7 +185,38 @@ $money = static fn (mixed $amount): string => 'Rp ' . number_format((float) $amo
             </form>
         <?php else: ?><p class="muted">Bayar kepada kurir saat pesanan diterima.</p><?php endif; ?>
     <?php elseif ($transaction['status_pembayaran'] === 'Lunas'): ?>
-        <p class="badge badge-success">Pembayaran QRIS sudah lunas.</p>
+        <p class="badge badge-success">Pembayaran <?= paymentEscape($transaction['metode_pembayaran']) ?> sudah lunas.</p>
+        <?php if ($role === 'buyer'): ?><p><a class="button button-primary" href="receipt.php?id=<?= (int) $transaction['id_transaksi'] ?>" target="_blank" rel="noopener">Lihat struk</a></p><?php endif; ?>
+    <?php elseif ($transaction['metode_pembayaran'] === 'DUITKU'): ?>
+        <p class="badge badge-pending" id="duitku-payment-status">Menunggu pembayaran melalui Duitku</p>
+        <?php if (!empty($transaction['duitku_payment_name'])): ?><p>Metode: <strong><?= paymentEscape($transaction['duitku_payment_name']) ?></strong></p><?php endif; ?>
+        <p class="muted">Halaman ini akan memperbarui status otomatis setelah pembayaran dikonfirmasi.</p>
+        <?php if (!empty($transaction['duitku_va_number'])): ?>
+            <section class="payment-proof-card">
+                <strong>Nomor pembayaran / VA</strong>
+                <code class="duitku-payment-code" id="duitku-va-number"><?= paymentEscape($transaction['duitku_va_number']) ?></code>
+                <button class="button button-secondary" type="button" data-copy="duitku-va-number">Salin nomor</button>
+            </section>
+        <?php endif; ?>
+        <?php if (!empty($transaction['duitku_qr_string'])): ?>
+            <section class="payment-proof-card">
+                <strong><?= $isDuitkuQris ? 'Nobu QRIS Duitku' : 'QRIS Duitku' ?></strong>
+                <p class="muted">Pindai gambar QR ini dari aplikasi pembayaran. Kode di bawah bisa disalin jika aplikasi Anda menerima payload QRIS.</p>
+                <div class="duitku-qr-image" id="duitku-qr-image" role="img" aria-label="QRIS pembayaran Duitku"></div>
+                <label for="duitku-qr-string">Kode QRIS untuk disalin</label>
+                <textarea class="duitku-payment-code" id="duitku-qr-string" rows="4" readonly><?= paymentEscape($transaction['duitku_qr_string']) ?></textarea>
+                <button class="button button-secondary" type="button" data-copy="duitku-qr-string">Salin kode QRIS</button>
+            </section>
+        <?php elseif ($isDuitkuQris): ?>
+            <p class="alert error">Invoice Nobu QRIS tidak menyertakan kode QR. Jangan gunakan tautan VA; buat ulang pembayaran atau hubungi admin toko.</p>
+        <?php endif; ?>
+        <?php if (!$isDuitkuQris && !empty($transaction['duitku_app_url'])): ?>
+            <p><a class="button button-primary" href="<?= paymentEscape($transaction['duitku_app_url']) ?>" target="_blank" rel="noopener">Buka aplikasi pembayaran</a></p>
+        <?php endif; ?>
+        <?php if (!$isDuitkuQris && !empty($transaction['duitku_payment_url'])): ?>
+            <p><a class="small-action" href="<?= paymentEscape($transaction['duitku_payment_url']) ?>" target="_blank" rel="noopener">Buka instruksi Duitku di tab baru</a></p>
+        <?php endif; ?>
+        <?php if (!empty($transaction['duitku_reference'])): ?><p class="muted">Referensi: <?= paymentEscape($transaction['duitku_reference']) ?></p><?php endif; ?>
     <?php else: ?>
         <p class="badge badge-pending">Menunggu pembayaran QRIS</p>
         <?php if ($qrisImage): ?>
@@ -218,5 +255,97 @@ $money = static fn (mixed $amount): string => 'Rp ' . number_format((float) $amo
     <?php endif; ?>
     <p><a class="small-action" href="index.php?page=<?= $role === 'buyer' ? 'my_orders' : 'transactions' ?>">Kembali ke aplikasi</a></p>
 </main>
+<?php if ($role === 'buyer' && $transaction['metode_pembayaran'] === 'DUITKU' && $transaction['status_pembayaran'] === 'Menunggu'): ?>
+<?php if (!empty($transaction['duitku_qr_string'])): ?><script src="assets/qrcode-generator.js?v=3" type="text/javascript"></script><?php endif; ?>
+<script>
+(() => {
+    const statusUrl = 'duitku-order-status.php?id=<?= (int) $transaction['id_transaksi'] ?>';
+    const refreshUrl = 'duitku-refresh-status.php';
+    const csrfToken = '<?= paymentEscape(authCsrfToken()) ?>';
+    let busy = false;
+    const checkStatus = async () => {
+        if (busy) return;
+        busy = true;
+        try {
+            const response = await fetch(statusUrl, { cache: 'no-store', credentials: 'same-origin' });
+            if (!response.ok) return;
+            const result = await response.json();
+            if (result.status === 'Lunas') window.location.reload();
+        } catch (_) {
+            // The page can keep showing the pending invoice while the network is unavailable.
+        } finally {
+            busy = false;
+        }
+    };
+    const refreshDuitkuStatus = async () => {
+        const body = new URLSearchParams({ id: '<?= (int) $transaction['id_transaksi'] ?>', csrf_token: csrfToken });
+        try {
+            const response = await fetch(refreshUrl, {
+                method: 'POST',
+                body,
+                cache: 'no-store',
+                credentials: 'same-origin',
+            });
+            if (!response.ok) return;
+            const result = await response.json();
+            if (result.status === 'Lunas') window.location.reload();
+        } catch (_) {
+            // Callback status polling remains active if the status API is temporarily unavailable.
+        }
+    };
+    document.querySelectorAll('[data-copy]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const target = document.getElementById(button.dataset.copy);
+            const text = target instanceof HTMLTextAreaElement ? target.value : (target?.textContent?.trim() || '');
+            if (!text) return;
+            try {
+                await navigator.clipboard.writeText(text);
+                const label = button.textContent;
+                button.textContent = 'Tersalin';
+                window.setTimeout(() => { button.textContent = label; }, 1600);
+            } catch (_) {
+                window.prompt('Salin teks pembayaran ini:', text);
+            }
+        });
+    });
+    const qrPayload = document.getElementById('duitku-qr-string')?.value;
+    const qrContainer = document.getElementById('duitku-qr-image');
+    const renderQrCode = () => {
+        const qrFactory = window.qrcode;
+        if (!qrPayload || !qrContainer || typeof qrFactory !== 'function') return false;
+        try {
+            const qr = qrFactory(0, 'M');
+            qr.addData(qrPayload, 'Byte');
+            qr.make();
+            qrContainer.innerHTML = qr.createImgTag(6, 4, 'QRIS Nobu Duitku');
+            return true;
+        } catch (_) {
+            qrContainer.textContent = 'QR tidak dapat dibuat. Salin payload QRIS di bawah.';
+            return false;
+        }
+    };
+    if (qrPayload && qrContainer && !renderQrCode()) {
+        qrContainer.textContent = 'Memuat gambar QRIS…';
+        const qrScript = document.createElement('script');
+        qrScript.src = 'assets/qrcode-generator.js?v=3&retry=1';
+        qrScript.onload = () => {
+            if (!renderQrCode()) qrContainer.textContent = 'QR tidak dapat dibuat. Salin payload QRIS di bawah.';
+        };
+        qrScript.onerror = () => { qrContainer.textContent = 'Gambar QR gagal dimuat. Salin payload QRIS di bawah.'; };
+        document.head.append(qrScript);
+    }
+    refreshDuitkuStatus();
+    window.setInterval(checkStatus, 8000);
+    let pageWasHidden = false;
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') pageWasHidden = true;
+        else if (pageWasHidden) {
+            pageWasHidden = false;
+            refreshDuitkuStatus();
+        }
+    });
+})();
+</script>
+<?php endif; ?>
 </body>
 </html>

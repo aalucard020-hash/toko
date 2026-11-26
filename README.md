@@ -42,6 +42,19 @@ Aplikasi web untuk mengelola penjualan toko, data produk, pelanggan, dan riwayat
 
 > 🔒 Kata sandi disimpan sebagai hash. Jangan membagikan kredensial akun admin.
 
+## Pembayaran Duitku
+
+Pembeli dapat memilih metode Duitku yang aktif untuk merchant tanpa memasukkan email. Daftar channel diambil dari Duitku dan mencakup metode seperti virtual account, kartu kredit, e-wallet, QRIS, serta ritel sesuai yang diaktifkan pada proyek merchant. Aplikasi membaca `API_KEY`, `MERCHANT`, dan `MODE` dari `.env`; `MODE=sandbox` otomatis memakai endpoint sandbox Duitku. Parameter `URL` pada `.env` adalah URL demo Duitku dan tidak dipakai sebagai URL kembali ke toko. Email teknis berakhiran `.invalid` dikirim ke API karena field email wajib menurut dokumentasi Duitku, sehingga pelanggan tidak perlu memberikan alamat email.
+
+Tambahkan URL callback publik opsional ke `.env` saat aplikasi dipasang pada domain yang dapat diakses Duitku:
+
+```dotenv
+DUITKU_CALLBACK_URL=https://domain-toko/tokoku/duitku-callback.php
+DUITKU_RETURN_URL=https://domain-toko/tokoku/payment.php
+```
+
+Di `localhost`, callback tidak dapat dijangkau dari luar; halaman pembayaran akan mengecek status ke Duitku ketika pelanggan kembali ke toko. File `.env` dikecualikan dari Git dan dilindungi dari akses HTTP oleh `.htaccess`. Buat API key baru dari dashboard Duitku karena key sebelumnya sudah dibagikan lewat chat.
+
 ## 👥 Role dan akses
 
 - **Admin** mengelola dashboard, transaksi, produk, pelanggan, aktivitas, dan akun kasir.
@@ -101,4 +114,5 @@ Argumen prosedur tersebut adalah ID pelanggan, ID produk, dan jumlah produk. Ses
 - 🔑 `login.php`, `register.php`, `logout.php`, `auth.php` — autentikasi, role, dan koneksi database.
 - 🧾 `receipt.php` — tampilan cetak struk 58 mm untuk admin dan kasir.
 - 🎨 `style.css` — tampilan aplikasi.
+- `assets/qrcode-generator.js` — pembuat QRIS lokal di browser (lisensi MIT).
 - 🗄️ `db_tokoku_lengkap.sql` — skema database, data contoh, serta objek dan query demonstrasi.

@@ -88,6 +88,10 @@ CREATE TABLE IF NOT EXISTS tbl_transaksi (
   total_belanja DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   metode_pembayaran VARCHAR(20) NOT NULL DEFAULT 'COD',
   status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas',
+  duitku_payment_name VARCHAR(100) DEFAULT NULL,
+  duitku_va_number VARCHAR(80) DEFAULT NULL,
+  duitku_qr_string TEXT DEFAULT NULL,
+  duitku_app_url VARCHAR(1000) DEFAULT NULL,
   bukti_pembayaran VARCHAR(255) DEFAULT NULL,
   id_pengguna INT DEFAULT NULL,
   PRIMARY KEY (id_transaksi),
@@ -114,6 +118,14 @@ ALTER TABLE tbl_transaksi
   ADD COLUMN IF NOT EXISTS status_pembayaran VARCHAR(20) NOT NULL DEFAULT 'Lunas';
 ALTER TABLE tbl_transaksi
   ADD COLUMN IF NOT EXISTS bukti_pembayaran VARCHAR(255) DEFAULT NULL;
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS duitku_payment_name VARCHAR(100) DEFAULT NULL;
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS duitku_va_number VARCHAR(80) DEFAULT NULL;
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS duitku_qr_string TEXT DEFAULT NULL;
+ALTER TABLE tbl_transaksi
+  ADD COLUMN IF NOT EXISTS duitku_app_url VARCHAR(1000) DEFAULT NULL;
 ALTER TABLE tbl_transaksi
   ADD COLUMN IF NOT EXISTS id_pengguna INT DEFAULT NULL;
 ALTER TABLE tbl_transaksi

@@ -10,6 +10,15 @@ function e(mixed $value): string
     return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 }
 
+function tokokuDuitkuPublicUrl(string $path): string
+{
+    $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    if (!preg_match('/^[A-Za-z0-9.\-:\[\]]+$/', $host)) $host = 'localhost';
+    $scheme = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 'https' : 'http';
+    $basePath = rtrim(str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/'))), '/');
+    return $scheme . '://' . $host . ($basePath !== '' ? $basePath : '') . '/' . ltrim($path, '/');
+}
+
 function rupiah(int|float|string|null $value): string
 {
     return 'Rp ' . number_format((float) $value, 0, ',', '.');
@@ -80,6 +89,8 @@ $transactions = $products = $customers = $categories = $logs = $monthlySales = $
 $buyerName = '';
 $qrisImage = null;
 $qrisImageName = null;
+$duitkuMethods = [];
+$duitkuMethodsError = null;
 $storeName = 'TokoKita';
 $storeLogo = null;
 $storeLogoName = null;
@@ -166,8 +177,9 @@ try {
         $buyerProfile->execute([$currentUser['id']]);
         $buyerName = (string) ($buyerProfile->fetchColumn() ?: '');
         if ($buyerName === '') {
-            http_response_code(403);
-            exit('Profil pembeli tidak ditemukan. Hubungi admin toko.');
+            unset($_SESSION['auth_user']);
+            header('Location: login.php?reason=buyer_profile');
+            exit;
         }
     }
     $categories = $pdo->query(
@@ -446,8 +458,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ];
         } elseif ($action === 'add_cart_sale') {
             $paymentMethod = strtoupper(trim((string) ($_POST['metode_pembayaran'] ?? 'COD')));
-            if (!in_array($paymentMethod, ['COD', 'QRIS'], true)) {
+            $duitkuMethod = strtoupper(trim((string) ($_POST['duitku_method'] ?? '')));
+            if (!in_array($paymentMethod, ['COD', 'QRIS', 'DUITKU'], true) || ($paymentMethod === 'DUITKU' && !$isBuyer)) {
                 throw new RuntimeException('Metode pembayaran yang dipilih tidak valid.');
+            }
+            if ($paymentMethod === 'DUITKU' && (getenv('DUITKU_API_KEY') === false || trim((string) getenv('DUITKU_API_KEY')) === '')) {
+                throw new RuntimeException('API key Duitku belum diatur di file .env.');
+            }
+            if ($paymentMethod === 'DUITKU' && !function_exists('curl_init')) {
+                throw new RuntimeException('Ekstensi cURL PHP belum aktif untuk menghubungi Duitku.');
+            }
+            if ($paymentMethod === 'DUITKU') {
+                $availableMethods = tokokuDuitkuPaymentMethods(10000);
+                $availableCodes = array_column($availableMethods, 'code');
+                if (!in_array($duitkuMethod, $availableCodes, true)) {
+                    throw new RuntimeException('Pilih metode Duitku yang aktif pada daftar pembayaran.');
+                }
             }
             if ($paymentMethod === 'QRIS' && $qrisImage === null) {
                 throw new RuntimeException('QRIS belum disiapkan admin. Unggah gambar QRIS toko terlebih dahulu.');
@@ -537,6 +563,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $totals = $pdo->prepare('SELECT fn_hitung_diskon(?) AS diskon, fn_hitung_total(?) AS total_belanja');
             $totals->execute([$subtotal, $subtotal]);
             $amounts = $totals->fetch();
+            if ($paymentMethod === 'DUITKU' && (int) round((float) $amounts['total_belanja']) < 10000) {
+                throw new RuntimeException('Minimal pembayaran Duitku adalah Rp 10.000. Tambahkan barang ke keranjang.');
+            }
             $createTransaction = $pdo->prepare(
                 'INSERT INTO tbl_transaksi
                     (tanggal, id_pelanggan, subtotal, diskon, total_belanja, metode_pembayaran, status_pembayaran, id_pengguna)
@@ -577,6 +606,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             $pdo->commit();
+            if ($paymentMethod === 'DUITKU') {
+                $merchantCode = (string) (getenv('DUITKU_MERCHANT_CODE') ?: 'DS38602');
+                $apiKey = (string) getenv('DUITKU_API_KEY');
+                $callbackUrl = (string) (getenv('DUITKU_CALLBACK_URL') ?: tokokuDuitkuPublicUrl('duitku-callback.php'));
+                $returnUrl = (string) (getenv('DUITKU_RETURN_URL') ?: tokokuDuitkuPublicUrl('payment.php'));
+                if ($apiKey === '') throw new RuntimeException('API key Duitku belum diatur di file .env.');
+                $amount = (int) round((float) $amounts['total_belanja']);
+                if ($amount < 10000) throw new RuntimeException('Minimal pembayaran Duitku adalah Rp 10.000.');
+                $merchantOrderId = 'TK-' . $transactionId . '-' . strtoupper(bin2hex(random_bytes(4)));
+                $signature = hash_hmac('sha256', $merchantCode . $merchantOrderId . $amount, $apiKey);
+                $payload = [
+                    'merchantCode' => $merchantCode,
+                    'paymentAmount' => $amount,
+                    'paymentMethod' => $duitkuMethod,
+                    'merchantOrderId' => $merchantOrderId,
+                    'productDetails' => 'Pesanan TokoKita #' . $transactionId,
+                    'email' => 'buyer' . (int) $currentUser['id'] . '@example.invalid',
+                    'phoneNumber' => '',
+                    'callbackUrl' => $callbackUrl,
+                    'returnUrl' => $returnUrl . (str_contains($returnUrl, '?') ? '&' : '?') . 'id=' . $transactionId,
+                    'signature' => $signature,
+                    'customerVaName' => mb_substr($buyerName, 0, 20),
+                    'expiryPeriod' => 1440,
+                ];
+                $duitkuApiUrl = tokokuDuitkuApiBase() . '/webapi/api/merchant/v2/inquiry';
+                $ch = curl_init($duitkuApiUrl);
+                curl_setopt_array($ch, [
+                    CURLOPT_POST => true,
+                    CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+                    CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_CONNECTTIMEOUT => 5,
+                    CURLOPT_TIMEOUT => 15,
+                ]);
+                $responseBody = curl_exec($ch);
+                $httpStatus = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $curlError = curl_error($ch);
+                curl_close($ch);
+                $response = is_string($responseBody) ? json_decode($responseBody, true) : null;
+                if ($curlError !== '' || $httpStatus < 200 || $httpStatus >= 300
+                    || !is_array($response) || empty($response['paymentUrl'])) {
+                    error_log('Duitku invoice error: HTTP ' . $httpStatus . ' ' . $curlError . ' ' . (string) $responseBody);
+                    throw new RuntimeException('Invoice Duitku gagal dibuat. Pesanan tercatat, silakan buka ulang pembayaran atau hubungi admin.');
+                }
+                $selectedMethod = array_values(array_filter(
+                    $availableMethods,
+                    static fn (array $method): bool => $method['code'] === $duitkuMethod
+                ))[0] ?? null;
+                $saveDuitku = $pdo->prepare('UPDATE tbl_transaksi
+                    SET duitku_order_id = ?, duitku_reference = ?, duitku_payment_url = ?, duitku_payment_name = ?,
+                        duitku_va_number = ?, duitku_qr_string = ?, duitku_app_url = ?
+                    WHERE id_transaksi = ?');
+                $saveDuitku->execute([
+                    $merchantOrderId,
+                    (string) ($response['reference'] ?? ''),
+                    (string) $response['paymentUrl'],
+                    is_array($selectedMethod) ? (string) $selectedMethod['name'] : $duitkuMethod,
+                    (string) ($response['vaNumber'] ?? ''),
+                    (string) ($response['qrString'] ?? ''),
+                    (string) ($response['appUrl'] ?? $response['AppUrl'] ?? ''),
+                    $transactionId,
+                ]);
+                header('Location: payment.php?id=' . $transactionId);
+                exit;
+            }
             $_SESSION['notice'] = [
                 'type' => 'success',
                 'text' => 'Transaksi #' . $transactionId . ' berhasil disimpan.',
@@ -958,8 +1052,15 @@ $outOfStock = $lowStockCount;
                             <select name="metode_pembayaran">
                                 <option value="COD">COD</option>
                                 <option value="QRIS" <?= $qrisImage === null ? 'disabled' : '' ?>>QRIS<?= $qrisImage === null ? ' (QR toko belum diatur)' : '' ?></option>
+                                <?php if ($isBuyer): ?><option value="DUITKU" id="duitku-main-option" disabled>Duitku (memuat metode…)</option><?php endif; ?>
                             </select>
                         </label>
+                        <?php if ($isBuyer): ?>
+                            <label class="shop-payment-label" id="duitku-method-label" hidden>Metode Duitku
+                                <select name="duitku_method" id="duitku-method-select" disabled></select>
+                            </label>
+                            <p class="form-hint" id="duitku-method-message" aria-live="polite"></p>
+                        <?php endif; ?>
                         <button class="button button-primary shop-checkout-button" id="shop-checkout-button" type="submit" disabled>Checkout sekarang <span>→</span></button>
                         <p class="form-hint">Stok dan diskon akan dihitung ulang saat checkout.</p>
                     </aside>
@@ -986,7 +1087,7 @@ $outOfStock = $lowStockCount;
                                 <td><?= rupiah($order['subtotal']) ?></td>
                                 <td class="discount-cell"><?= rupiah($order['diskon']) ?></td>
                                 <td><strong><?= rupiah($order['total_belanja']) ?></strong></td>
-                                <td><?php if ($order['status_pembayaran'] === 'Menunggu'): ?><a class="small-action" href="payment.php?id=<?= (int) $order['id_transaksi'] ?>"><?= $order['metode_pembayaran'] === 'QRIS' ? (!empty($order['bukti_pembayaran']) ? 'Bukti terkirim' : 'Bayar QRIS') : 'Info COD' ?></a><?php else: ?><span class="badge badge-success"><i></i> Lunas · <?= e($order['metode_pembayaran']) ?></span><?php endif; ?></td>
+                                <td><?php if ($order['status_pembayaran'] === 'Menunggu'): ?><a class="small-action" href="payment.php?id=<?= (int) $order['id_transaksi'] ?>"><?= $order['metode_pembayaran'] === 'QRIS' ? (!empty($order['bukti_pembayaran']) ? 'Bukti terkirim' : 'Bayar QRIS') : ($order['metode_pembayaran'] === 'DUITKU' ? 'Bayar Duitku' : 'Info COD') ?></a><?php else: ?><span class="badge badge-success"><i></i> Lunas · <?= e($order['metode_pembayaran']) ?></span> <a class="small-action" href="receipt.php?id=<?= (int) $order['id_transaksi'] ?>" target="_blank" rel="noopener">Lihat struk</a><?php endif; ?></td>
                             </tr>
                         <?php endforeach; ?>
                         <?php if (!$buyerOrders): ?>
@@ -1598,6 +1699,40 @@ document.querySelectorAll('[data-camera-scan]').forEach((button) => {
     });
 });
 
+const duitkuMethodSelect = document.querySelector('#duitku-method-select');
+if (duitkuMethodSelect) {
+    const methodOption = document.querySelector('#duitku-main-option');
+    const methodLabel = document.querySelector('#duitku-method-label');
+    const methodMessage = document.querySelector('#duitku-method-message');
+    fetch('duitku-methods.php', { cache: 'no-store', credentials: 'same-origin' })
+        .then(async (response) => {
+            const result = await response.json();
+            if (!response.ok || !Array.isArray(result.methods)) throw new Error(result.error || 'Daftar metode tidak tersedia.');
+            const methods = result.methods;
+            methods.forEach((method) => {
+                const option = document.createElement('option');
+                option.value = method.code;
+                option.textContent = method.name + (Number(method.fee) > 0
+                    ? ' · biaya Rp ' + new Intl.NumberFormat('id-ID').format(Number(method.fee))
+                    : '');
+                duitkuMethodSelect.append(option);
+            });
+            if (!methods.length) throw new Error('Belum ada channel Duitku aktif.');
+            duitkuMethodSelect.value = methods.some((method) => method.code === 'NQ') ? 'NQ' : methods[0].code;
+            duitkuMethodSelect.disabled = false;
+            methodLabel.hidden = false;
+            methodOption.disabled = false;
+            methodOption.textContent = 'Duitku (' + methods.length + ' metode aktif)';
+            methodMessage.textContent = methods.some((method) => method.code === 'NQ')
+                ? 'Nobu QRIS dipilih otomatis. Anda juga bisa memilih channel lain yang aktif.'
+                : 'Pilih channel pembayaran Duitku yang aktif.';
+        })
+        .catch((error) => {
+            methodOption.textContent = 'Duitku (gagal memuat metode)';
+            methodMessage.textContent = error.message + ' Coba muat ulang halaman.';
+        });
+}
+
 const shopForm = document.querySelector('#shop-form');
 if (shopForm) {
     const productCards = [...shopForm.querySelectorAll('[data-shop-product]')];
@@ -1722,6 +1857,13 @@ if (shopForm) {
         if (!productCards.some((card) => Number(card.querySelector('[data-product-quantity]').value) > 0)) {
             event.preventDefault();
             shopForm.querySelector('#shop-checkout-button').focus();
+            return;
+        }
+        const paymentSelect = shopForm.querySelector('[name="metode_pembayaran"]');
+        if (paymentSelect?.value === 'DUITKU') {
+            const button = shopForm.querySelector('#shop-checkout-button');
+            button.disabled = true;
+            button.textContent = 'Menyiapkan invoice Duitku…';
         }
     });
     updateCart();

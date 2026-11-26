@@ -410,6 +410,11 @@ tbody tr:hover { background: #fcfcff; }
 .payment-total { margin: 16px 0; color: #d87522; font-size: 22px; font-weight: 750; }
 .payment-confirm-form { margin-top: 18px; }
 .payment-proof-card { display: grid; gap: 10px; justify-items: center; margin: 16px 0; padding: 14px; border: 1px solid #e6e9ef; border-radius: 10px; background: #fafbfc; color: #414652; font-size: 11px; }
+.duitku-payment-code { display: block; justify-self: stretch; width: 100%; max-width: 100%; min-height: 100px; margin: 8px 0; padding: 10px; overflow-wrap: anywhere; border: 0; border-radius: 7px; background: #f0f2f6; color: #1f2937; font: 12px/1.5 "Courier New", monospace; user-select: all; box-sizing: border-box; }
+.duitku-payment-code:is(textarea) { resize: vertical; }
+.duitku-qr-image { display: grid; min-height: 220px; place-items: center; padding: 8px; background: #fff; }
+.duitku-qr-image svg { display: block; width: min(100%, 300px); height: auto; image-rendering: pixelated; }
+.duitku-qr-image img { display: block; width: min(100%, 300px); height: auto; image-rendering: pixelated; }
 .payment-proof-preview { display: block; width: min(100%, 220px); max-height: 280px; object-fit: contain; border: 1px solid #e2e5ea; border-radius: 7px; background: #fff; }
 .payment-proof-form { display: grid; justify-items: stretch; gap: 9px; margin-top: 16px; padding: 14px; border: 1px solid #e8eaf0; border-radius: 9px; text-align: left; }
 .payment-proof-form label { display: grid; gap: 8px; color: #515764; font-size: 11px; font-weight: 650; }

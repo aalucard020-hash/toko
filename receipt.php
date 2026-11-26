@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/auth.php';
 requireAuth();
-requireRole('admin', 'cashier');
+requireRole('admin', 'cashier', 'buyer');
 
 function receiptEscape(mixed $value): string
 {
@@ -83,8 +83,8 @@ try {
         : null;
     $header = $pdo->prepare(
         'SELECT t.id_transaksi, t.tanggal, t.subtotal, t.diskon, t.total_belanja,
-                t.metode_pembayaran, t.status_pembayaran,
-                p.nama_pelanggan, p.kota
+                t.metode_pembayaran, t.status_pembayaran, t.duitku_payment_name,
+                p.nama_pelanggan, p.kota, p.id_pelanggan
          FROM tbl_transaksi AS t
          JOIN tbl_pelanggan AS p ON p.id_pelanggan = t.id_pelanggan
          WHERE t.id_transaksi = ?'
@@ -94,6 +94,15 @@ try {
     if (!$transaction) {
         http_response_code(404);
         exit('Transaksi tidak ditemukan.');
+    }
+    if (authUser()['role'] === 'buyer'
+        && (int) authUser()['id_pelanggan'] !== (int) $transaction['id_pelanggan']) {
+        http_response_code(403);
+        exit('Anda tidak memiliki akses ke struk ini.');
+    }
+    if (authUser()['role'] === 'buyer' && $transaction['status_pembayaran'] !== 'Lunas') {
+        http_response_code(403);
+        exit('Struk tersedia setelah pembayaran dikonfirmasi.');
     }
 
     $items = $pdo->prepare(
@@ -155,7 +164,11 @@ $money = static fn (mixed $amount): string => 'Rp ' . number_format((float) $amo
     <div class="meta"><span>Transaksi</span><strong>#<?= (int) $transaction['id_transaksi'] ?></strong></div>
     <div class="meta"><span>Tanggal</span><span><?= receiptEscape(date('d/m/Y', strtotime($transaction['tanggal']))) ?></span></div>
     <div class="meta"><span>Pelanggan</span><span><?= receiptEscape($transaction['nama_pelanggan']) ?></span></div>
-    <div class="meta"><span>Pembayaran</span><span><?= receiptEscape($transaction['metode_pembayaran']) ?> · <?= receiptEscape($transaction['status_pembayaran']) ?></span></div>
+    <?php $paymentLabel = $transaction['metode_pembayaran'] === 'DUITKU' && !empty($transaction['duitku_payment_name'])
+        ? 'Duitku · ' . $transaction['duitku_payment_name']
+        : $transaction['metode_pembayaran']; ?>
+    <div class="meta"><span>Metode pembayaran</span><span><?= receiptEscape($paymentLabel) ?></span></div>
+    <div class="meta"><span>Status pembayaran</span><span><?= receiptEscape($transaction['status_pembayaran']) ?></span></div>
     <div class="rule"></div>
     <section class="items" aria-label="Rincian produk">
         <?php foreach ($details as $item): ?>

@@ -19,6 +19,9 @@ if (authUser() !== null) {
 }
 
 $error = null;
+if (($_GET['reason'] ?? '') === 'buyer_profile') {
+    $error = 'Sesi pembeli lama sudah diakhiri karena profilnya tidak tertaut. Masuk kembali dengan akun pembeli yang benar. Jika pesan berulang, minta admin menautkan akun ke profil pelanggan.';
+}
 $databaseReady = false;
 $firstUser = false;
 $pdo = null;
